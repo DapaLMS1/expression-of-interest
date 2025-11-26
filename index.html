@@ -98,20 +98,20 @@
                 ],
                 condition: () => 3 // Next is Q3 (ID 3). This will be overridden by age check in nextStep().
             },
-            { // Index 3 (ID 3)
+            { // Index 3 (ID 3) - MODIFIED LOGIC HERE
                 id: 3,
                 type: 'radio',
                 title: "What is your current employment status?",
-                explanation: "Your employment status guides us to the right funding category: Traineeship, State Funding, or Fee-Paying.",
+                explanation: "Eligibility for the funded program requires full-time or part-time contracted employment, as the program is structured as a Traineeship.",
                 answerKey: 'employment_status',
                 options: [
                     { value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" },
-                    { value: 'casual', text: "I am employed on a casual basis.", description: "You may be eligible for State-based funding.", icon: "⏳" },
-                    { value: 'unemployed', text: "I am currently not employed.", description: "You may be eligible for State-based Fully Funded programs.", icon: "🛋️" }
+                    { value: 'casual', text: "I am employed on a casual basis.", description: "This status is generally not eligible for the Traineeship program.", icon: "⏳" },
+                    { value: 'unemployed', text: "I am currently not employed.", description: "This status is generally not eligible for the Traineeship program.", icon: "🛋️" }
                 ],
                 condition: (ans) => {
                     if (ans === 'contracted') return 4; // Check Cert III eligibility for Cert IV Traineeship
-                    return 6; // Skip to General Funding Check (Q6)
+                    return 'ineligible_non_contracted'; // NEW: Direct casual/unemployed to ineligibility outcome
                 }
             },
             { // Index 4 (ID 4)
@@ -138,7 +138,7 @@
                 ],
                 condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' // Outcome
             },
-            { // Index 6 (ID 6) - General Funding Check (Non-Traineeship path end)
+            { // Index 6 (ID 6) - General Funding Check (Now only reachable if contracted but not sponsored for traineeship)
                 id: 6,
                 type: 'radio',
                 title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?",
@@ -150,7 +150,7 @@
                 ],
                 condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co' // Outcome
             },
-            { // Index 7 (ID 7) - Traineeship Sponsorship (Non-Cert III holder pa>$0th)
+            { // Index 7 (ID 7) - Traineeship Sponsorship (Non-Cert III holder path)
                 id: 7,
                 type: 'radio',
                 title: "Is your employer willing to sponsor you as a trainee?",
@@ -164,7 +164,7 @@
             }
         ];
 
-        // --- Outcome Messages (Same as before) ---
+        // --- Outcome Messages ---
         const outcomes = {
             'ineligible_nsw': {
                 title: "Not Eligible for NSW Funding",
@@ -177,6 +177,12 @@
                 message: "As you are under 18, you fall under the School-Based Traineeship (SBAT) pathway. Please contact your school's Careers Advisor or our enrolment team directly to discuss SBAT options.",
                 program: "SBAT (Cert III)",
                 category: "SBAT"
+            },
+            'ineligible_non_contracted': { // NEW OUTCOME
+                title: "Not Eligible for Traineeship Program",
+                message: "This specific funded program is structured as a Traineeship, which requires you to be a contracted (full-time or part-time) employee in a dental assisting role. Based on your employment status, you are not eligible for this funding stream. Please contact us to discuss fee-paying options.",
+                program: "No Enrolment",
+                category: "Not Eligible"
             },
             'outcome_path_1': {
                 title: "Path 1: Fee-Free Traineeship (Cert IV)",
