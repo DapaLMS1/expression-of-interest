@@ -57,12 +57,7 @@
     </div>
 
     <script type="module">
-        // Import Firebase services
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Import Firebase services
+        // FIX: Consolidated Firebase imports, as they were duplicated and causing a module loading error.
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
@@ -119,11 +114,12 @@
 
         async function initializeFirebase() {
             try {
+                // setLogLevel('debug'); // Uncomment for debugging in console
+
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                // setLogLevel('debug'); // Uncomment for debugging in console
-
+                
                 // 1. Authenticate the user
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
@@ -209,7 +205,7 @@
 
             try {
                 // Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
-                const collectionRef = collection(db, 'eoi', appId, 'users', userId, 'eligibility_submissions');
+                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
                 
                 // Use the timestamp for a unique document ID
                 await setDoc(doc(collectionRef, timestamp.replace(/[:.]/g, '-')), submissionData);
