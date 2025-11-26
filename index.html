@@ -13,6 +13,11 @@
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 4px; }
         .step-transition { transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out; }
+        .input-warning {
+            color: #ef4444; /* red-500 */
+            font-size: 0.875rem; /* text-sm */
+            margin-top: 0.25rem; /* mt-1 */
+        }
     </style>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
@@ -21,7 +26,7 @@
         
         <!-- Progress Bar -->
         <div class="mb-6">
-            <div class="text-sm font-medium text-gray-500 mb-1">Question <span id="current-step-display">1</span> of 5</div>
+            <div class="text-sm font-medium text-gray-500 mb-1">Question <span id="current-step-display">1</span> of 6</div>
             <div class="w-full bg-gray-200 rounded-full h-2.5">
                 <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
             </div>
@@ -46,15 +51,17 @@
     <script>
         // State management
         let currentStepIndex = 0; // Index in the steps array
-        let currentVisibleStep = 1; // 1-indexed for display (1 to 5)
+        let currentVisibleStep = 1; // 1-indexed for display (1 to MAX_STEPS)
         let answers = {};
-        const MAX_STEPS = 5; // The longest path has 5 questions
+        const MAX_STEPS = 6; // Max questions in the longest path (Q1, Q2, Q8, Q3, Q4, Q5)
 
-        // --- Logic Definitions (Steps reordered by ID for internal clarity) ---
+        // --- Logic Definitions ---
 
+        // Question structure: ID, Title, Explanation, Options/Inputs
         const steps = [
             { // Index 0 (ID 1)
                 id: 1,
+                type: 'radio',
                 title: "Where are you currently located?",
                 explanation: "To be eligible for NSW State-based funding programs, you must currently live in New South Wales.",
                 answerKey: 'nsw_resident',
@@ -62,10 +69,11 @@
                     { value: 'yes', text: "Yes, I currently live in NSW", description: "This is step one on our journey!", icon: "🏡" },
                     { value: 'no', text: "No, I live outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }
                 ],
-                condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2
+                condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2 // Next is Q2 (ID 2)
             },
             { // Index 1 (ID 2)
                 id: 2,
+                type: 'radio',
                 title: "Are you over 18 years of age?",
                 explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.",
                 answerKey: 'over_18',
@@ -73,16 +81,32 @@
                     { value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" },
                     { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }
                 ],
-                condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 3
+                condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 8 // Next is Data Capture (ID 8)
             },
-            { // Index 2 (ID 3)
+            { // Index 2 (ID 8) - NEW DATA CAPTURE STEP
+                id: 8,
+                type: 'input',
+                title: "Your Contact Details",
+                explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.",
+                answerKey: 'personal_details',
+                fields: [
+                    { name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' },
+                    { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' },
+                    { name: 'mobile', label: 'Mobile Number', type: 'tel', required: true, placeholder: '04XX XXX XXX' },
+                    { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' },
+                    { name: 'dob', label: 'Date of Birth', type: 'date', required: true }
+                ],
+                condition: () => 3 // Next is Q3 (ID 3). This will be overridden by age check in nextStep().
+            },
+            { // Index 3 (ID 3)
                 id: 3,
+                type: 'radio',
                 title: "What is your current employment status?",
                 explanation: "Your employment status guides us to the right funding category: Traineeship, State Funding, or Fee-Paying.",
                 answerKey: 'employment_status',
                 options: [
-                    { value: 'contracted', text: "I am a contracted full-time or part-time employee.", description: "This could qualify for a Fee-Free Traineeship.", icon: "👨‍⚕️" },
-                    { value: 'casual', text: "I am employed on a casual basis.", description: "Casual work usually falls under State or Fee-paying funding.", icon: "⏳" },
+                    { value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" },
+                    { value: 'casual', text: "I am employed on a casual basis.", description: "You may be eligible for State-based funding.", icon: "⏳" },
                     { value: 'unemployed', text: "I am currently not employed.", description: "You may be eligible for State-based Fully Funded programs.", icon: "🛋️" }
                 ],
                 condition: (ans) => {
@@ -90,8 +114,9 @@
                     return 6; // Skip to General Funding Check (Q6)
                 }
             },
-            { // Index 3 (ID 4)
+            { // Index 4 (ID 4)
                 id: 4,
+                type: 'radio',
                 title: "Do you hold or are you completing a Certificate III in Dental Assisting?",
                 explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.",
                 answerKey: 'prior_cert3',
@@ -101,8 +126,9 @@
                 ],
                 condition: (ans) => ans === 'yes' ? 5 : 7 // If No, go to Traineeship Sponsorship (Q7)
             },
-            { // Index 4 (ID 5)
+            { // Index 5 (ID 5)
                 id: 5,
+                type: 'radio',
                 title: "If completed, was your Cert III finished more than 3 months ago?",
                 explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.",
                 answerKey: 'completion_time',
@@ -110,10 +136,11 @@
                     { value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" },
                     { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }
                 ],
-                condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1'
+                condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' // Outcome
             },
-            { // Index 5 (ID 6) - General Funding Check (Non-Traineeship path end)
+            { // Index 6 (ID 6) - General Funding Check (Non-Traineeship path end)
                 id: 6,
+                type: 'radio',
                 title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?",
                 explanation: "Prior completion of a higher-level course may affect the level of subsidy (fully funded vs. co-payment) you are eligible for.",
                 answerKey: 'prior_funding',
@@ -121,10 +148,11 @@
                     { value: 'no', text: "No, this is my first government-funded qualification at this level.", description: "You are most likely eligible for the highest level of State funding.", icon: "✅" },
                     { value: 'yes', text: "Yes, I have completed a Cert IV, Diploma, or higher previously.", description: "You may still be eligible for a State Co-Payment subsidy.", icon: "⚠️" }
                 ],
-                condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co'
+                condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co' // Outcome
             },
-            { // Index 6 (ID 7) - Traineeship Sponsorship (Non-Cert III holder path)
+            { // Index 7 (ID 7) - Traineeship Sponsorship (Non-Cert III holder pa>$0th)
                 id: 7,
+                type: 'radio',
                 title: "Is your employer willing to sponsor you as a trainee?",
                 explanation: "For the Cert III Traineeship, the course must be structured as an agreement between you, your employer, and the training provider.",
                 answerKey: 'sponsor_willing',
@@ -136,8 +164,7 @@
             }
         ];
 
-        // --- Outcome Messages ---
-
+        // --- Outcome Messages (Same as before) ---
         const outcomes = {
             'ineligible_nsw': {
                 title: "Not Eligible for NSW Funding",
@@ -153,31 +180,31 @@
             },
             'outcome_path_1': {
                 title: "Path 1: Fee-Free Traineeship (Cert IV)",
-                message: "You are highly likely to be eligible for the **Certificate IV in Dental Assisting Traineeship**. As you have recent/in-progress Cert III experience, you can access a full NSW Smart & Skilled subsidy for your elevation training.",
+                message: "You are highly likely to be eligible for the <strong>Certificate IV in Dental Assisting Traineeship</strong>. As you have recently completed (or are about to complete) a Cert III, you can access a fee-free traineeship for your elevation training.",
                 program: "Certificate IV in Dental Assisting (Traineeship)",
                 category: "Fee-free traineeship"
             },
             'outcome_path_2': {
                 title: "Path 2: Fee-Free Traineeship (Cert III)",
-                message: "You are highly likely to be eligible for the **Certificate III in Dental Assisting Traineeship**. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.",
+                message: "You are highly likely to be eligible for the <strong>Certificate III in Dental Assisting Traineeship</strong>. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.",
                 program: "Certificate III in Dental Assisting (Traineeship)",
                 category: "Fee-free traineeship"
             },
             'outcome_path_3': {
                 title: "Path 3: Cert IV with Co-payment Funding",
-                message: "You are eligible for the **Certificate IV in Dental Assisting** qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student/employer.",
+                message: "You are eligible for the <strong>Certificate IV in Dental Assisting</strong> qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student or employer.",
                 program: "Certificate IV in Dental Assisting (EFQ Pool)",
                 category: "State-based co-payment"
             },
             'outcome_funding_fully': {
                 title: "Fully Funded / High Subsidy Eligibility",
-                message: "Based on your employment and study history, you are highly likely to be eligible for a **State-based Fully Funded** or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).",
+                message: "Based on your employment and study history, you are highly likely to be eligible for a <strong>State-based fully funded</strong> or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).",
                 program: "Certificate III in Dental Assisting (Student)",
                 category: "State-based fully funded"
             },
             'outcome_funding_co': {
                 title: "State Co-payment / Fee-Paying Eligibility",
-                message: "Due to your prior completion of a government-funded VET qualification, you may fall into the **State-based Co-payment** tier. If you are not eligible for any subsidy, the enrolment will be Fee-Paying. We will confirm the exact fee upon submission.",
+                message: "Due to your prior completion of a government-funded VET qualification, you may fall into the <strong>State-based funded co-payment</strong> to help pay for your studies. If you are not eligible for any subsidy, you will need to pay the full fee. We will confirm the exact fee upon submission.",
                 program: "Certificate III/IV in Dental Assisting (Student)",
                 category: "State-based co-payment / Fee-paying student"
             },
@@ -189,24 +216,77 @@
             }
         };
 
+        // Helper function to calculate age from DOB string
+        function calculateAge(dobString) {
+            const today = new Date();
+            const dob = new Date(dobString);
+            let age = today.getFullYear() - dob.getFullYear();
+            const monthDifference = today.getMonth() - dob.getMonth();
+            
+            // Adjust age if the birthday hasn't passed yet this year
+            if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < dob.getDate())) {
+                age--;
+            }
+            return age;
+        }
 
         // --- UI Rendering Functions ---
 
-        function renderStep(stepIndex) {
-            const step = steps[stepIndex];
-            const contentDiv = document.getElementById('step-content');
-            const nextButton = document.getElementById('next-button');
-            const currentStepDisplay = document.getElementById('current-step-display');
-            
-            if (!step) return;
-
-            // Update Progress Bar
+        function updateProgress() {
             const progress = (currentVisibleStep / MAX_STEPS) * 100;
             document.getElementById('progress-bar').style.width = `${progress}%`;
-            currentStepDisplay.textContent = currentVisibleStep;
+            document.getElementById('current-step-display').textContent = currentVisibleStep;
+        }
 
+        function renderStep(stepIndex) {
+            const step = steps[stepIndex];
+            if (!step) return;
 
-            let optionsHtml = step.options.map(option => `
+            currentStepIndex = stepIndex; // Update the index
+            updateProgress();
+
+            const contentDiv = document.getElementById('step-content');
+            const nextButton = document.getElementById('next-button');
+
+            contentDiv.innerHTML = `
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">${currentVisibleStep}. ${step.title}</h2>
+                <p class="text-sm text-gray-600 mb-6 border-l-4 border-yellow-400 pl-3 py-1 bg-yellow-50 rounded-md">${step.explanation}</p>
+                <div class="${step.type === 'radio' ? 'options-container' : 'input-container'}" id="step-form-content">
+                    ${step.type === 'radio' ? renderRadioOptions(step) : renderInputFields(step)}
+                </div>
+            `;
+            
+            // Re-enable button listener for input fields
+            if (step.type === 'input') {
+                const formContent = document.getElementById('step-form-content');
+                // Use 'keyup' for better real-time formatting feedback on mobile field
+                formContent.addEventListener('keyup', validateInputFields);
+                formContent.addEventListener('change', validateInputFields);
+            }
+            
+            nextButton.textContent = 'Continue';
+            nextButton.disabled = true;
+            document.getElementById('restart-button').classList.add('hidden');
+
+            // If an answer was already recorded, pre-fill it and enable the button
+            if (answers[step.answerKey]) {
+                if (step.type === 'radio') {
+                    document.querySelector(`input[name="${step.answerKey}"][value="${answers[step.answerKey]}"]`).checked = true;
+                    enableButton();
+                } else if (step.type === 'input') {
+                    step.fields.forEach(field => {
+                        const input = document.querySelector(`input[name="${field.name}"]`);
+                        if (input && answers[step.answerKey][field.name]) {
+                            input.value = answers[step.answerKey][field.name];
+                        }
+                    });
+                    validateInputFields(); // Re-validate the pre-filled form
+                }
+            }
+        }
+
+        function renderRadioOptions(step) {
+            return step.options.map(option => `
                 <label class="block mb-4 cursor-pointer">
                     <input type="radio" name="${step.answerKey}" value="${option.value}" class="hidden peer" onchange="enableButton()">
                     <div class="p-4 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:border-blue-500 peer-checked:border-blue-600 peer-checked:bg-blue-50 transition duration-200">
@@ -220,17 +300,25 @@
                     </div>
                 </label>
             `).join('');
+        }
 
-            contentDiv.innerHTML = `
-                <h2 class="text-2xl font-bold text-gray-800 mb-2">${currentVisibleStep}. ${step.title}</h2>
-                <p class="text-sm text-gray-600 mb-6 border-l-4 border-yellow-400 pl-3 py-1 bg-yellow-50 rounded-md">${step.explanation}</p>
-                <div class="options-container">
-                    ${optionsHtml}
+        function renderInputFields(step) {
+            return step.fields.map(field => `
+                <div class="mb-4">
+                    <label for="${field.name}" class="block text-sm font-medium text-gray-700 mb-1">${field.label}${field.required ? ' *' : ''}</label>
+                    <input 
+                        type="${field.type}" 
+                        id="${field.name}" 
+                        name="${field.name}" 
+                        placeholder="${field.placeholder || ''}"
+                        ${field.required ? 'required' : ''}
+                        ${field.pattern ? `pattern="${field.pattern}"` : ''}
+                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150"
+                    >
+                    <!-- Dedicated warning message area for mobile and email -->
+                    ${(field.name === 'mobile' || field.name === 'email') ? `<p id="${field.name}-warning" class="input-warning hidden"></p>` : ''}
                 </div>
-            `;
-            nextButton.textContent = 'Continue';
-            nextButton.disabled = true;
-            document.getElementById('restart-button').classList.add('hidden');
+            `).join('');
         }
 
         function renderOutcome(outcomeKey) {
@@ -271,6 +359,77 @@
             document.getElementById('next-button').disabled = false;
         }
 
+        function validateInputFields() {
+            const step = steps[currentStepIndex];
+            if (step.type !== 'input') return;
+            
+            let allValid = true;
+            let currentAnswers = {};
+
+            step.fields.forEach(field => {
+                const input = document.getElementById(field.name);
+                
+                // Save current value
+                currentAnswers[field.name] = input.value;
+                
+                // 1. Required field check (if empty, validation fails)
+                if (field.required && !input.value.trim()) {
+                    allValid = false;
+                } 
+                
+                // 2. Mobile Number Validation and Formatting
+                if (field.name === 'mobile') {
+                    const warning = document.getElementById('mobile-warning');
+                    // Remove all non-digits (including spaces, dashes, etc.)
+                    const cleanedMobile = input.value.replace(/\D/g, ''); 
+
+                    if (cleanedMobile.length !== 10) {
+                        warning.textContent = "Mobile number must be exactly 10 digits (e.g., 04XX XXX XXX).";
+                        warning.classList.remove('hidden');
+                        allValid = false;
+                    } else {
+                        // Post-input formatting: NNNN NNN NNN (e.g., 0412 345 678)
+                        // Update the visible input value
+                        input.value = `${cleanedMobile.substring(0, 4)} ${cleanedMobile.substring(4, 7)} ${cleanedMobile.substring(7, 10)}`;
+                        // Ensure the stored answer (in currentAnswers) uses the cleaned value for backend consistency
+                        currentAnswers[field.name] = cleanedMobile; 
+                        warning.classList.add('hidden');
+                    }
+                } 
+                
+                // 3. Email Validation
+                else if (field.name === 'email') {
+                    const warning = document.getElementById('email-warning');
+
+                    if (!input.value.includes('@')) {
+                        warning.textContent = "Email must contain an @ symbol.";
+                        warning.classList.remove('hidden');
+                        allValid = false;
+                    } 
+                    // Secondary check for basic format validity (if it fails, also invalidate the form)
+                    else if (!/\S+@\S+\.\S+/.test(input.value)) {
+                        warning.textContent = "Please enter a valid email address format (user@domain.com).";
+                        warning.classList.remove('hidden');
+                        allValid = false;
+                    }
+                    else {
+                        warning.classList.add('hidden');
+                    }
+                }
+                
+                // 4. DOB check for future dates (preventing selection of future dates)
+                else if (input.value && input.type === 'date') {
+                    const today = new Date().toISOString().split('T')[0];
+                    if (input.value > today) {
+                        allValid = false;
+                    }
+                }
+            });
+
+            answers[step.answerKey] = currentAnswers;
+            document.getElementById('next-button').disabled = !allValid;
+        }
+
 
         // --- Navigation Logic ---
 
@@ -278,11 +437,36 @@
             const step = steps[currentStepIndex];
             if (!step) return;
 
-            const selectedOption = document.querySelector(`input[name="${step.answerKey}"]:checked`);
-            if (!selectedOption) return; // Should be impossible if button is enabled
+            let nextId;
+            let currentAnswer;
 
-            answers[step.answerKey] = selectedOption.value;
-            let nextId = step.condition(selectedOption.value);
+            if (step.type === 'radio') {
+                const selectedOption = document.querySelector(`input[name="${step.answerKey}"]:checked`);
+                if (!selectedOption) return;
+                currentAnswer = selectedOption.value;
+                answers[step.answerKey] = currentAnswer;
+                nextId = step.condition(currentAnswer);
+            } else if (step.type === 'input') {
+                // Re-run validation one last time on button press to ensure current state is valid
+                validateInputFields(); 
+                if (document.getElementById('next-button').disabled) return; 
+                
+                // IMPORTANT: Age check based on submitted DOB for the Contact Details step (ID 8)
+                if (step.id === 8) {
+                    const dobString = answers[step.answerKey]['dob'];
+                    const age = calculateAge(dobString);
+                    
+                    if (age < 18) {
+                        nextId = 'ineligible_sbat';
+                    } else {
+                        // Proceed to the original next step (Q3, ID 3)
+                        nextId = step.condition(); 
+                    }
+                } else {
+                    // For any future input fields
+                    nextId = step.condition(); 
+                }
+            }
             
             // 1. Handle explicit outcome (string)
             if (typeof nextId === 'string') {
@@ -294,8 +478,10 @@
             const nextStepIndex = steps.findIndex(s => s.id === nextId);
 
             if (nextStepIndex !== -1) {
-                currentStepIndex = nextStepIndex;
+                // Increment visible step count correctly regardless of jumps
                 currentVisibleStep++;
+                
+                currentStepIndex = nextStepIndex;
                 renderStep(currentStepIndex);
             } else {
                 console.error("Navigation error: Next step ID not found in steps array:", nextId);
