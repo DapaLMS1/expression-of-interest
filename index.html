@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dental Assisting Enrolment Eligibility Check</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+        /* Custom scrollbar for better feel */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 4px; }
+        .step-transition { transition: opacity 0.3s ease-in-out, transform 0.3s ease-in-out; }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div id="quiz-container" class="w-full max-w-lg bg-white shadow-2xl rounded-xl p-8 transition duration-500 ease-in-out transform hover:scale-[1.01]">
+        
+        <!-- Progress Bar -->
+        <div class="mb-6">
+            <div class="text-sm font-medium text-gray-500 mb-1">Question <span id="current-step-display">1</span> of 5</div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Dynamic Content Area -->
+        <div id="step-content">
+            <!-- Steps will be injected here -->
+        </div>
+
+        <!-- Action Button -->
+        <div class="mt-8 pt-4 border-t border-gray-100">
+            <button id="next-button" onclick="nextStep()" class="w-full py-3 bg-blue-600 text-white font-semibold text-lg rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 transform hover:scale-[1.02]" disabled>
+                Continue
+            </button>
+            <button id="restart-button" onclick="startQuiz()" class="hidden w-full py-3 mt-3 bg-gray-500 text-white font-semibold text-lg rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-4 focus:ring-gray-400 focus:ring-opacity-50 transition duration-150 transform hover:scale-[1.02]">
+                Start Again
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // State management
+        let currentStepIndex = 0; // Index in the steps array
+        let currentVisibleStep = 1; // 1-indexed for display (1 to 5)
+        let answers = {};
+        const MAX_STEPS = 5; // The longest path has 5 questions
+
+        // --- Logic Definitions (Steps reordered by ID for internal clarity) ---
+
+        const steps = [
+            { // Index 0 (ID 1)
+                id: 1,
+                title: "Where are you currently located?",
+                explanation: "To be eligible for NSW State-based funding programs, you must currently live in New South Wales.",
+                answerKey: 'nsw_resident',
+                options: [
+                    { value: 'yes', text: "Yes, I currently live in NSW", description: "This is step one on our journey!", icon: "🏡" },
+                    { value: 'no', text: "No, I live outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }
+                ],
+                condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2
+            },
+            { // Index 1 (ID 2)
+                id: 2,
+                title: "Are you over 18 years of age?",
+                explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.",
+                answerKey: 'over_18',
+                options: [
+                    { value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" },
+                    { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }
+                ],
+                condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 3
+            },
+            { // Index 2 (ID 3)
+                id: 3,
+                title: "What is your current employment status?",
+                explanation: "Your employment status guides us to the right funding category: Traineeship, State Funding, or Fee-Paying.",
+                answerKey: 'employment_status',
+                options: [
+                    { value: 'contracted', text: "I am a contracted full-time or part-time employee.", description: "This could qualify for a Fee-Free Traineeship.", icon: "👨‍⚕️" },
+                    { value: 'casual', text: "I am employed on a casual basis.", description: "Casual work usually falls under State or Fee-paying funding.", icon: "⏳" },
+                    { value: 'unemployed', text: "I am currently not employed.", description: "You may be eligible for State-based Fully Funded programs.", icon: "🛋️" }
+                ],
+                condition: (ans) => {
+                    if (ans === 'contracted') return 4; // Check Cert III eligibility for Cert IV Traineeship
+                    return 6; // Skip to General Funding Check (Q6)
+                }
+            },
+            { // Index 3 (ID 4)
+                id: 4,
+                title: "Do you hold or are you completing a Certificate III in Dental Assisting?",
+                explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.",
+                answerKey: 'prior_cert3',
+                options: [
+                    { value: 'yes', text: "Yes, I hold or am completing the Cert III.", description: "Let's check your eligibility for Cert IV!", icon: "🎓" },
+                    { value: 'no', text: "No, I do not have a Cert III.", description: "You will likely start with the Certificate III Traineeship.", icon: "📖" }
+                ],
+                condition: (ans) => ans === 'yes' ? 5 : 7 // If No, go to Traineeship Sponsorship (Q7)
+            },
+            { // Index 4 (ID 5)
+                id: 5,
+                title: "If completed, was your Cert III finished more than 3 months ago?",
+                explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.",
+                answerKey: 'completion_time',
+                options: [
+                    { value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" },
+                    { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }
+                ],
+                condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1'
+            },
+            { // Index 5 (ID 6) - General Funding Check (Non-Traineeship path end)
+                id: 6,
+                title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?",
+                explanation: "Prior completion of a higher-level course may affect the level of subsidy (fully funded vs. co-payment) you are eligible for.",
+                answerKey: 'prior_funding',
+                options: [
+                    { value: 'no', text: "No, this is my first government-funded qualification at this level.", description: "You are most likely eligible for the highest level of State funding.", icon: "✅" },
+                    { value: 'yes', text: "Yes, I have completed a Cert IV, Diploma, or higher previously.", description: "You may still be eligible for a State Co-Payment subsidy.", icon: "⚠️" }
+                ],
+                condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co'
+            },
+            { // Index 6 (ID 7) - Traineeship Sponsorship (Non-Cert III holder path)
+                id: 7,
+                title: "Is your employer willing to sponsor you as a trainee?",
+                explanation: "For the Cert III Traineeship, the course must be structured as an agreement between you, your employer, and the training provider.",
+                answerKey: 'sponsor_willing',
+                options: [
+                    { value: 'yes', text: "Yes, my employer is ready to sponsor me.", description: "This confirms your eligibility for a Fee-Free Cert III Traineeship.", icon: "🤝" },
+                    { value: 'no', text: "No, I'm just looking for personal study (not a traineeship).", description: "You will proceed to the general State Funding eligibility check.", icon: "👤" }
+                ],
+                condition: (ans) => ans === 'yes' ? 'outcome_path_2' : 6 // If No, jump to Q6 (General Funding Check)
+            }
+        ];
+
+        // --- Outcome Messages ---
+
+        const outcomes = {
+            'ineligible_nsw': {
+                title: "Not Eligible for NSW Funding",
+                message: "Unfortunately, our current fully-funded and subsidised programs require you to be a resident of New South Wales. We recommend looking for training providers in your local state.",
+                program: "No Enrolment",
+                category: "Not Eligible"
+            },
+            'ineligible_sbat': {
+                title: "School-Based Traineeship Pathway Required",
+                message: "As you are under 18, you fall under the School-Based Traineeship (SBAT) pathway. Please contact your school's Careers Advisor or our enrolment team directly to discuss SBAT options.",
+                program: "SBAT (Cert III)",
+                category: "SBAT"
+            },
+            'outcome_path_1': {
+                title: "Path 1: Fee-Free Traineeship (Cert IV)",
+                message: "You are highly likely to be eligible for the **Certificate IV in Dental Assisting Traineeship**. As you have recent/in-progress Cert III experience, you can access a full NSW Smart & Skilled subsidy for your elevation training.",
+                program: "Certificate IV in Dental Assisting (Traineeship)",
+                category: "Fee-free traineeship"
+            },
+            'outcome_path_2': {
+                title: "Path 2: Fee-Free Traineeship (Cert III)",
+                message: "You are highly likely to be eligible for the **Certificate III in Dental Assisting Traineeship**. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.",
+                program: "Certificate III in Dental Assisting (Traineeship)",
+                category: "Fee-free traineeship"
+            },
+            'outcome_path_3': {
+                title: "Path 3: Cert IV with Co-payment Funding",
+                message: "You are eligible for the **Certificate IV in Dental Assisting** qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student/employer.",
+                program: "Certificate IV in Dental Assisting (EFQ Pool)",
+                category: "State-based co-payment"
+            },
+            'outcome_funding_fully': {
+                title: "Fully Funded / High Subsidy Eligibility",
+                message: "Based on your employment and study history, you are highly likely to be eligible for a **State-based Fully Funded** or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).",
+                program: "Certificate III in Dental Assisting (Student)",
+                category: "State-based fully funded"
+            },
+            'outcome_funding_co': {
+                title: "State Co-payment / Fee-Paying Eligibility",
+                message: "Due to your prior completion of a government-funded VET qualification, you may fall into the **State-based Co-payment** tier. If you are not eligible for any subsidy, the enrolment will be Fee-Paying. We will confirm the exact fee upon submission.",
+                program: "Certificate III/IV in Dental Assisting (Student)",
+                category: "State-based co-payment / Fee-paying student"
+            },
+            'error_generic': {
+                title: "Quiz Error",
+                message: "An unexpected error occurred in the quiz flow. Please try restarting, or contact us for direct assistance.",
+                program: "Error",
+                category: "Error"
+            }
+        };
+
+
+        // --- UI Rendering Functions ---
+
+        function renderStep(stepIndex) {
+            const step = steps[stepIndex];
+            const contentDiv = document.getElementById('step-content');
+            const nextButton = document.getElementById('next-button');
+            const currentStepDisplay = document.getElementById('current-step-display');
+            
+            if (!step) return;
+
+            // Update Progress Bar
+            const progress = (currentVisibleStep / MAX_STEPS) * 100;
+            document.getElementById('progress-bar').style.width = `${progress}%`;
+            currentStepDisplay.textContent = currentVisibleStep;
+
+
+            let optionsHtml = step.options.map(option => `
+                <label class="block mb-4 cursor-pointer">
+                    <input type="radio" name="${step.answerKey}" value="${option.value}" class="hidden peer" onchange="enableButton()">
+                    <div class="p-4 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:border-blue-500 peer-checked:border-blue-600 peer-checked:bg-blue-50 transition duration-200">
+                        <div class="flex items-start">
+                            <span class="text-3xl mr-4">${option.icon}</span>
+                            <div>
+                                <p class="text-gray-900 font-semibold text-lg">${option.text}</p>
+                                <p class="text-sm text-gray-500 mt-1">${option.description}</p>
+                            </div>
+                        </div>
+                    </div>
+                </label>
+            `).join('');
+
+            contentDiv.innerHTML = `
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">${currentVisibleStep}. ${step.title}</h2>
+                <p class="text-sm text-gray-600 mb-6 border-l-4 border-yellow-400 pl-3 py-1 bg-yellow-50 rounded-md">${step.explanation}</p>
+                <div class="options-container">
+                    ${optionsHtml}
+                </div>
+            `;
+            nextButton.textContent = 'Continue';
+            nextButton.disabled = true;
+            document.getElementById('restart-button').classList.add('hidden');
+        }
+
+        function renderOutcome(outcomeKey) {
+            const outcome = outcomes[outcomeKey];
+            const contentDiv = document.getElementById('step-content');
+            document.getElementById('next-button').classList.add('hidden');
+            document.getElementById('restart-button').classList.remove('hidden');
+
+            // Update Progress Bar to 100%
+            document.getElementById('progress-bar').style.width = `100%`;
+            document.getElementById('current-step-display').textContent = MAX_STEPS;
+
+
+            contentDiv.innerHTML = `
+                <div class="text-center py-6 bg-blue-100 rounded-xl mb-6">
+                    <svg class="w-12 h-12 text-blue-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <h2 class="text-2xl font-bold text-blue-800">${outcome.title}</h2>
+                </div>
+                
+                <div class="space-y-4">
+                    <div class="p-4 bg-gray-50 rounded-lg">
+                        <p class="text-sm font-semibold text-gray-700">Recommended Program:</p>
+                        <p class="text-lg font-bold text-gray-900">${outcome.program}</p>
+                    </div>
+                    <div class="p-4 bg-gray-50 rounded-lg">
+                        <p class="text-sm font-semibold text-gray-700">Predicted Funding Category:</p>
+                        <p class="text-lg font-bold text-blue-600">${outcome.category}</p>
+                    </div>
+                    <div class="p-4 border-l-4 border-blue-400 bg-blue-50 rounded-lg">
+                        <p class="text-md text-gray-700">${outcome.message}</p>
+                        <p class="text-xs text-gray-500 mt-2 italic">Note: All eligibility is subject to final confirmation by the training provider upon EOI submission.</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        function enableButton() {
+            document.getElementById('next-button').disabled = false;
+        }
+
+
+        // --- Navigation Logic ---
+
+        function nextStep() {
+            const step = steps[currentStepIndex];
+            if (!step) return;
+
+            const selectedOption = document.querySelector(`input[name="${step.answerKey}"]:checked`);
+            if (!selectedOption) return; // Should be impossible if button is enabled
+
+            answers[step.answerKey] = selectedOption.value;
+            let nextId = step.condition(selectedOption.value);
+            
+            // 1. Handle explicit outcome (string)
+            if (typeof nextId === 'string') {
+                renderOutcome(nextId);
+                return;
+            }
+
+            // 2. Handle numerical step ID (jump to next question)
+            const nextStepIndex = steps.findIndex(s => s.id === nextId);
+
+            if (nextStepIndex !== -1) {
+                currentStepIndex = nextStepIndex;
+                currentVisibleStep++;
+                renderStep(currentStepIndex);
+            } else {
+                console.error("Navigation error: Next step ID not found in steps array:", nextId);
+                renderOutcome('error_generic'); 
+            }
+        }
+
+        function startQuiz() {
+            currentStepIndex = 0;
+            currentVisibleStep = 1;
+            answers = {};
+            document.getElementById('next-button').classList.remove('hidden');
+            document.getElementById('restart-button').classList.add('hidden');
+            renderStep(currentStepIndex);
+        }
+
+        // Initialize the quiz on load
+        window.onload = startQuiz;
+
+    </script>
+
+</body>
+</html>
