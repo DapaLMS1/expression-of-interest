@@ -24,6 +24,12 @@
 
     <div id="quiz-container" class="w-full max-w-lg bg-white shadow-2xl rounded-xl p-8 transition duration-500 ease-in-out transform hover:scale-[1.01]">
         
+        <!-- Status and User ID -->
+        <div class="mb-4 text-xs text-gray-500 space-y-1">
+            <div id="auth-status">Initializing services...</div>
+            <div id="user-id-display" class="hidden font-mono">User ID: <span id="user-id-value"></span></div>
+        </div>
+
         <!-- Progress Bar -->
         <div class="mb-6">
             <div class="text-sm font-medium text-gray-500 mb-1">Question <span id="current-step-display">1</span> of 6</div>
@@ -34,11 +40,13 @@
 
         <!-- Dynamic Content Area -->
         <div id="step-content">
+            <p class="text-center text-gray-500">Loading quiz...</p>
             <!-- Steps will be injected here -->
         </div>
 
         <!-- Action Button -->
         <div class="mt-8 pt-4 border-t border-gray-100">
+            <div id="save-status-message" class="text-center text-sm font-medium mb-3 hidden"></div>
             <button id="next-button" onclick="nextStep()" class="w-full py-3 bg-blue-600 text-white font-semibold text-lg rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 transform hover:scale-[1.02]" disabled>
                 Continue
             </button>
@@ -48,195 +56,180 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
+        // Import Firebase services
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
         // State management
-        let currentStepIndex = 0; // Index in the steps array
-        let currentVisibleStep = 1; // 1-indexed for display (1 to MAX_STEPS)
+        let currentStepIndex = 0; 
+        let currentVisibleStep = 1; 
         let answers = {};
-        const MAX_STEPS = 6; // Max questions in the longest path (Q1, Q2, Q8, Q3, Q4, Q5)
+        const MAX_STEPS = 6;
+        let db;
+        let auth;
+        let userId = null;
+        let isAuthReady = false;
+        
+        // Safety check and environment setup
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // --- Logic Definitions ---
-
-        // Question structure: ID, Title, Explanation, Options/Inputs
-        const steps = [
-            { // Index 0 (ID 1)
-                id: 1,
-                type: 'radio',
-                title: "Where are you currently located?",
-                explanation: "To be eligible for NSW funding programs, you must be in New South Wales.",
-                answerKey: 'nsw_resident',
-                options: [
-                    { value: 'yes', text: "Yes, I currently live or work in NSW", description: "This is step one on our journey!", icon: "🏡" },
-                    { value: 'no', text: "No, I'm outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }
-                ],
-                condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2 // Next is Q2 (ID 2)
+        // Configuration mapping for converting radio values to plain English sentences
+        const answerTextMapping = {
+            'nsw_resident': {
+                'yes': "I currently live or work in NSW.",
+                'no': "I am located outside of NSW."
             },
-            { // Index 1 (ID 2)
-                id: 2,
-                type: 'radio',
-                title: "Are you over 18 years of age?",
-                explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.",
-                answerKey: 'over_18',
-                options: [
-                    { value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" },
-                    { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }
-                ],
-                condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 8 // Next is Data Capture (ID 8)
+            'over_18': {
+                'yes': "I am 18 or older.",
+                'no': "I am under 18 years old."
             },
-            { // Index 2 (ID 8) - NEW DATA CAPTURE STEP
-                id: 8,
-                type: 'input',
-                title: "Your Contact Details",
-                explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.",
-                answerKey: 'personal_details',
-                fields: [
-                    { name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' },
-                    { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' },
-                    { name: 'mobile', label: 'Mobile Number', type: 'tel', required: true, placeholder: '04XX XXX XXX' },
-                    { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' },
-                    { name: 'dob', label: 'Date of Birth', type: 'date', required: true }
-                ],
-                condition: () => 3 // Next is Q3 (ID 3). This will be overridden by age check in nextStep().
+            'employment_status': {
+                'contracted': "I am a full-time or part-time contracted employee.",
+                'casual': "I am employed on a casual basis.",
+                'unemployed': "I am currently not employed."
             },
-            { // Index 3 (ID 3) - MODIFIED LOGIC HERE
-                id: 3,
-                type: 'radio',
-                title: "What is your current employment status?",
-                explanation: "Eligibility for the funded program requires full-time or part-time contracted employment, as the program is structured as a Traineeship.",
-                answerKey: 'employment_status',
-                options: [
-                    { value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" },
-                    { value: 'casual', text: "I am employed on a casual basis.", description: "This status is generally not eligible for the Traineeship program.", icon: "⏳" },
-                    { value: 'unemployed', text: "I am currently not employed.", description: "This status is generally not eligible for the Traineeship program.", icon: "🛋️" }
-                ],
-                condition: (ans) => {
-                    if (ans === 'contracted') return 4; // Check Cert III eligibility for Cert IV Traineeship
-                    return 'ineligible_non_contracted'; // NEW: Direct casual/unemployed to ineligibility outcome
-                }
+            'prior_cert3': {
+                'yes': "I hold or am completing a Certificate III in Dental Assisting.",
+                'no': "I do not have a Cert III in Dental Assisting."
             },
-            { // Index 4 (ID 4)
-                id: 4,
-                type: 'radio',
-                title: "Do you hold or are you completing a Certificate III in Dental Assisting?",
-                explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.",
-                answerKey: 'prior_cert3',
-                options: [
-                    { value: 'yes', text: "Yes, I hold or am completing the Cert III.", description: "Let's check your eligibility for Cert IV!", icon: "🎓" },
-                    { value: 'no', text: "No, I do not have a Cert III.", description: "You will likely start with the Certificate III Traineeship.", icon: "📖" }
-                ],
-                condition: (ans) => ans === 'yes' ? 5 : 7 // If No, go to Traineeship Sponsorship (Q7)
+            'completion_time': {
+                'yes': "My Cert III was completed more than 3 months ago.",
+                'no': "My Cert III was completed recently or is still in progress."
             },
-            { // Index 5 (ID 5)
-                id: 5,
-                type: 'radio',
-                title: "If completed, was your Cert III finished more than 3 months ago?",
-                explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.",
-                answerKey: 'completion_time',
-                options: [
-                    { value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" },
-                    { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }
-                ],
-                condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' // Outcome
+            'prior_funding': {
+                'no': "I have not previously completed a government-funded VET qualification (Cert IV or higher).",
+                'yes': "I have previously completed a government-funded VET qualification (Cert IV or higher)."
             },
-            { // Index 6 (ID 6) - General Funding Check (Now only reachable if contracted but not sponsored for traineeship)
-                id: 6,
-                type: 'radio',
-                title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?",
-                explanation: "Prior completion of a higher-level course may affect the level of subsidy (fully funded vs. co-payment) you are eligible for.",
-                answerKey: 'prior_funding',
-                options: [
-                    { value: 'no', text: "No, this is my first government-funded qualification at this level.", description: "You are most likely eligible for the highest level of State funding.", icon: "✅" },
-                    { value: 'yes', text: "Yes, I have completed a Cert IV, Diploma, or higher previously.", description: "You may still be eligible for a State Co-Payment subsidy.", icon: "⚠️" }
-                ],
-                condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co' // Outcome
-            },
-            { // Index 7 (ID 7) - Traineeship Sponsorship (Non-Cert III holder path)
-                id: 7,
-                type: 'radio',
-                title: "Is your employer willing to sponsor you as a trainee?",
-                explanation: "For the Cert III Traineeship, the course must be structured as an agreement between you, your employer, and the training provider.",
-                answerKey: 'sponsor_willing',
-                options: [
-                    { value: 'yes', text: "Yes, my employer is ready to sponsor me.", description: "This confirms your eligibility for a Fee-Free Cert III Traineeship.", icon: "🤝" },
-                    { value: 'no', text: "No, I'm just looking for personal study (not a traineeship).", description: "You will proceed to the general State Funding eligibility check.", icon: "👤" }
-                ],
-                condition: (ans) => ans === 'yes' ? 'outcome_path_2' : 6 // If No, jump to Q6 (General Funding Check)
-            }
-        ];
-
-        // --- Outcome Messages ---
-        const outcomes = {
-            'ineligible_nsw': {
-                title: "Not Eligible for NSW Funding",
-                message: "Unfortunately, our current fully-funded and subsidised programs require you to be a resident of New South Wales. We recommend looking for training providers in your local state.",
-                program: "No Enrolment",
-                category: "Not Eligible"
-            },
-            'ineligible_sbat': {
-                title: "School-Based Traineeship Pathway Required",
-                message: "As you are under 18, you fall under the School-Based Traineeship (SBAT) pathway. Please contact your school's Careers Advisor or our enrolment team directly to discuss SBAT options.",
-                program: "SBAT (Cert III)",
-                category: "SBAT"
-            },
-            'ineligible_non_contracted': { // NEW OUTCOME
-                title: "Not Eligible for Traineeship Program",
-                message: "This specific funded program is structured as a Traineeship, which requires you to be a contracted (full-time or part-time) employee in a dental assisting role. Based on your employment status, you are not eligible for this funding stream. Please contact us to discuss fee-paying options.",
-                program: "No Enrolment",
-                category: "Not Eligible"
-            },
-            'outcome_path_1': {
-                title: "Path 1: Fee-Free Traineeship (Cert IV)",
-                message: "You are highly likely to be eligible for the <strong>Certificate IV in Dental Assisting Traineeship</strong>. As you have recently completed (or are about to complete) a Cert III, you can access a fee-free traineeship for your elevation training.",
-                program: "Certificate IV in Dental Assisting (Traineeship)",
-                category: "Fee-free traineeship"
-            },
-            'outcome_path_2': {
-                title: "Path 2: Fee-Free Traineeship (Cert III)",
-                message: "You are highly likely to be eligible for the <strong>Certificate III in Dental Assisting Traineeship</strong>. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.",
-                program: "Certificate III in Dental Assisting (Traineeship)",
-                category: "Fee-free traineeship"
-            },
-            'outcome_path_3': {
-                title: "Path 3: Cert IV with Co-payment Funding",
-                message: "You are eligible for the <strong>Certificate IV in Dental Assisting</strong> qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student or employer.",
-                program: "Certificate IV in Dental Assisting (EFQ Pool)",
-                category: "State-based co-payment"
-            },
-            'outcome_funding_fully': {
-                title: "Fully Funded / High Subsidy Eligibility",
-                message: "Based on your employment and study history, you are highly likely to be eligible for a <strong>State-based fully funded</strong> or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).",
-                program: "Certificate III in Dental Assisting (Student)",
-                category: "State-based fully funded"
-            },
-            'outcome_funding_co': {
-                title: "State Co-payment / Fee-Paying Eligibility",
-                message: "Due to your prior completion of a government-funded VET qualification, you may fall into the <strong>State-based funded co-payment</strong> to help pay for your studies. If you are not eligible for any subsidy, you will need to pay the full fee. We will confirm the exact fee upon submission.",
-                program: "Certificate III/IV in Dental Assisting (Student)",
-                category: "State-based co-payment / Fee-paying student"
-            },
-            'error_generic': {
-                title: "Quiz Error",
-                message: "An unexpected error occurred in the quiz flow. Please try restarting, or contact us for direct assistance.",
-                program: "Error",
-                category: "Error"
+            'sponsor_willing': {
+                'yes': "My employer is willing to sponsor me as a trainee.",
+                'no': "I am looking for personal study, not a traineeship."
             }
         };
 
-        // Helper function to calculate age from DOB string
+        // --- Firebase Initialization and Auth ---
+
+        async function initializeFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                // setLogLevel('debug'); // Uncomment for debugging in console
+
+                // 1. Authenticate the user
+                if (initialAuthToken) {
+                    await signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // 2. Set up listener to get user ID and mark ready
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-value').textContent = userId;
+                        document.getElementById('user-id-display').classList.remove('hidden');
+                        document.getElementById('auth-status').textContent = 'Services ready.';
+                        isAuthReady = true;
+                        startQuiz(); // Start the quiz once authenticated
+                    } else {
+                        document.getElementById('auth-status').textContent = 'Failed to authenticate.';
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                document.getElementById('auth-status').textContent = `Initialization Error: ${error.message}`;
+            }
+        }
+
+        // --- Data Persistence ---
+
+        function constructSubmissionText(answers) {
+            let submissionText = [];
+
+            // 1. Personal Details (Text Input Step 8)
+            const details = answers['personal_details'];
+            if (details) {
+                submissionText.push(`Applicant Details: ${details.first_name} ${details.last_name}, Mobile: ${details.mobile}, Email: ${details.email}, DOB: ${details.dob}.`);
+            }
+
+            // 2. Question/Radio Answers (In order of potential appearance)
+            for (const key of ['nsw_resident', 'over_18', 'employment_status', 'prior_cert3', 'sponsor_willing', 'completion_time', 'prior_funding']) {
+                const answerValue = answers[key];
+                if (answerValue && answerTextMapping[key] && answerTextMapping[key][answerValue]) {
+                    submissionText.push(answerTextMapping[key][answerValue]);
+                }
+            }
+
+            return submissionText.join(" ");
+        }
+
+
+        async function saveSubmission(outcomeKey) {
+            const saveStatusEl = document.getElementById('save-status-message');
+            saveStatusEl.classList.remove('hidden', 'text-green-600', 'text-red-600');
+            saveStatusEl.classList.add('text-gray-500');
+            saveStatusEl.innerHTML = `
+                <svg class="animate-spin -ml-1 mr-3 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                Saving result...
+            `;
+
+            if (!isAuthReady || !userId) {
+                console.error("Attempted to save before auth was ready.");
+                saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
+                saveStatusEl.textContent = "Error: Authentication not complete. Result not saved.";
+                return;
+            }
+
+            const outcome = outcomes[outcomeKey];
+            const timestamp = new Date().toISOString();
+            const submissionText = constructSubmissionText(answers);
+
+            const submissionData = {
+                timestamp: timestamp,
+                outcome_key: outcomeKey,
+                program: outcome.program,
+                category: outcome.category,
+                personal_details: answers['personal_details'],
+                full_submission_text: submissionText, // The required concatenated string
+                raw_answers: answers
+            };
+
+            try {
+                // Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
+                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
+                
+                // Use the timestamp for a unique document ID
+                await setDoc(doc(collectionRef, timestamp.replace(/[:.]/g, '-')), submissionData);
+
+                saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
+                saveStatusEl.innerHTML = `✅ Result saved successfully!`;
+            } catch (error) {
+                console.error("Firestore Save Error:", error);
+                saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
+                saveStatusEl.textContent = `Error saving data: ${error.message}.`;
+            }
+        }
+
+        // --- Quiz Logic (Externalized for module access) ---
+
         function calculateAge(dobString) {
             const today = new Date();
             const dob = new Date(dobString);
             let age = today.getFullYear() - dob.getFullYear();
             const monthDifference = today.getMonth() - dob.getMonth();
-            
-            // Adjust age if the birthday hasn't passed yet this year
             if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < dob.getDate())) {
                 age--;
             }
             return age;
         }
-
-        // --- UI Rendering Functions ---
 
         function updateProgress() {
             const progress = (currentVisibleStep / MAX_STEPS) * 100;
@@ -248,7 +241,7 @@
             const step = steps[stepIndex];
             if (!step) return;
 
-            currentStepIndex = stepIndex; // Update the index
+            currentStepIndex = stepIndex;
             updateProgress();
 
             const contentDiv = document.getElementById('step-content');
@@ -262,10 +255,8 @@
                 </div>
             `;
             
-            // Re-enable button listener for input fields
             if (step.type === 'input') {
                 const formContent = document.getElementById('step-form-content');
-                // Use 'keyup' for better real-time formatting feedback on mobile field
                 formContent.addEventListener('keyup', validateInputFields);
                 formContent.addEventListener('change', validateInputFields);
             }
@@ -273,8 +264,8 @@
             nextButton.textContent = 'Continue';
             nextButton.disabled = true;
             document.getElementById('restart-button').classList.add('hidden');
+            document.getElementById('save-status-message').classList.add('hidden');
 
-            // If an answer was already recorded, pre-fill it and enable the button
             if (answers[step.answerKey]) {
                 if (step.type === 'radio') {
                     document.querySelector(`input[name="${step.answerKey}"][value="${answers[step.answerKey]}"]`).checked = true;
@@ -286,7 +277,7 @@
                             input.value = answers[step.answerKey][field.name];
                         }
                     });
-                    validateInputFields(); // Re-validate the pre-filled form
+                    validateInputFields();
                 }
             }
         }
@@ -321,7 +312,6 @@
                         ${field.pattern ? `pattern="${field.pattern}"` : ''}
                         class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150"
                     >
-                    <!-- Dedicated warning message area for mobile and email -->
                     ${(field.name === 'mobile' || field.name === 'email') ? `<p id="${field.name}-warning" class="input-warning hidden"></p>` : ''}
                 </div>
             `).join('');
@@ -333,15 +323,13 @@
             document.getElementById('next-button').classList.add('hidden');
             document.getElementById('restart-button').classList.remove('hidden');
 
-            // Update Progress Bar to 100%
             document.getElementById('progress-bar').style.width = `100%`;
             document.getElementById('current-step-display').textContent = MAX_STEPS;
 
-
             contentDiv.innerHTML = `
-                <div class="text-center py-6 bg-blue-100 rounded-xl mb-6">
-                    <svg class="w-12 h-12 text-blue-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    <h2 class="text-2xl font-bold text-blue-800">${outcome.title}</h2>
+                <div class="text-center py-6 ${outcomeKey.startsWith('ineligible') ? 'bg-red-100' : 'bg-blue-100'} rounded-xl mb-6">
+                    <svg class="w-12 h-12 ${outcomeKey.startsWith('ineligible') ? 'text-red-600' : 'text-blue-600'} mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                    <h2 class="text-2xl font-bold ${outcomeKey.startsWith('ineligible') ? 'text-red-800' : 'text-blue-800'}">${outcome.title}</h2>
                 </div>
                 
                 <div class="space-y-4">
@@ -353,12 +341,15 @@
                         <p class="text-sm font-semibold text-gray-700">Predicted Funding Category:</p>
                         <p class="text-lg font-bold text-blue-600">${outcome.category}</p>
                     </div>
-                    <div class="p-4 border-l-4 border-blue-400 bg-blue-50 rounded-lg">
+                    <div class="p-4 border-l-4 ${outcomeKey.startsWith('ineligible') ? 'border-red-400 bg-red-50' : 'border-blue-400 bg-blue-50'} rounded-lg">
                         <p class="text-md text-gray-700">${outcome.message}</p>
                         <p class="text-xs text-gray-500 mt-2 italic">Note: All eligibility is subject to final confirmation by the training provider upon EOI submission.</p>
                     </div>
                 </div>
             `;
+            
+            // --- FIREBASE ACTION: Save the final result ---
+            saveSubmission(outcomeKey);
         }
 
         function enableButton() {
@@ -374,19 +365,14 @@
 
             step.fields.forEach(field => {
                 const input = document.getElementById(field.name);
-                
-                // Save current value
                 currentAnswers[field.name] = input.value;
                 
-                // 1. Required field check (if empty, validation fails)
                 if (field.required && !input.value.trim()) {
                     allValid = false;
                 } 
                 
-                // 2. Mobile Number Validation and Formatting
                 if (field.name === 'mobile') {
                     const warning = document.getElementById('mobile-warning');
-                    // Remove all non-digits (including spaces, dashes, etc.)
                     const cleanedMobile = input.value.replace(/\D/g, ''); 
 
                     if (cleanedMobile.length !== 10) {
@@ -394,26 +380,15 @@
                         warning.classList.remove('hidden');
                         allValid = false;
                     } else {
-                        // Post-input formatting: NNNN NNN NNN (e.g., 0412 345 678)
-                        // Update the visible input value
                         input.value = `${cleanedMobile.substring(0, 4)} ${cleanedMobile.substring(4, 7)} ${cleanedMobile.substring(7, 10)}`;
-                        // Ensure the stored answer (in currentAnswers) uses the cleaned value for backend consistency
                         currentAnswers[field.name] = cleanedMobile; 
                         warning.classList.add('hidden');
                     }
                 } 
                 
-                // 3. Email Validation
                 else if (field.name === 'email') {
                     const warning = document.getElementById('email-warning');
-
-                    if (!input.value.includes('@')) {
-                        warning.textContent = "Email must contain an @ symbol.";
-                        warning.classList.remove('hidden');
-                        allValid = false;
-                    } 
-                    // Secondary check for basic format validity (if it fails, also invalidate the form)
-                    else if (!/\S+@\S+\.\S+/.test(input.value)) {
+                    if (!/\S+@\S+\.\S+/.test(input.value)) {
                         warning.textContent = "Please enter a valid email address format (user@domain.com).";
                         warning.classList.remove('hidden');
                         allValid = false;
@@ -423,7 +398,6 @@
                     }
                 }
                 
-                // 4. DOB check for future dates (preventing selection of future dates)
                 else if (input.value && input.type === 'date') {
                     const today = new Date().toISOString().split('T')[0];
                     if (input.value > today) {
@@ -436,8 +410,6 @@
             document.getElementById('next-button').disabled = !allValid;
         }
 
-
-        // --- Navigation Logic ---
 
         function nextStep() {
             const step = steps[currentStepIndex];
@@ -453,11 +425,9 @@
                 answers[step.answerKey] = currentAnswer;
                 nextId = step.condition(currentAnswer);
             } else if (step.type === 'input') {
-                // Re-run validation one last time on button press to ensure current state is valid
                 validateInputFields(); 
                 if (document.getElementById('next-button').disabled) return; 
                 
-                // IMPORTANT: Age check based on submitted DOB for the Contact Details step (ID 8)
                 if (step.id === 8) {
                     const dobString = answers[step.answerKey]['dob'];
                     const age = calculateAge(dobString);
@@ -465,28 +435,22 @@
                     if (age < 18) {
                         nextId = 'ineligible_sbat';
                     } else {
-                        // Proceed to the original next step (Q3, ID 3)
                         nextId = step.condition(); 
                     }
                 } else {
-                    // For any future input fields
                     nextId = step.condition(); 
                 }
             }
             
-            // 1. Handle explicit outcome (string)
             if (typeof nextId === 'string') {
                 renderOutcome(nextId);
                 return;
             }
 
-            // 2. Handle numerical step ID (jump to next question)
             const nextStepIndex = steps.findIndex(s => s.id === nextId);
 
             if (nextStepIndex !== -1) {
-                // Increment visible step count correctly regardless of jumps
                 currentVisibleStep++;
-                
                 currentStepIndex = nextStepIndex;
                 renderStep(currentStepIndex);
             } else {
@@ -495,17 +459,52 @@
             }
         }
 
-        function startQuiz() {
+        // --- Core Quiz Data ---
+        const steps = [
+            { id: 1, type: 'radio', title: "Where are you currently located?", explanation: "To be eligible for NSW funding programs, you must be in New South Wales.", answerKey: 'nsw_resident', options: [{ value: 'yes', text: "Yes, I currently live or work in NSW", description: "This is step one on our journey!", icon: "🏡" }, { value: 'no', text: "No, I'm outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }], condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2 },
+            { id: 2, type: 'radio', title: "Are you over 18 years of age?", explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.", answerKey: 'over_18', options: [{ value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" }, { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }], condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 8 },
+            { id: 8, type: 'input', title: "Your Contact Details", explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.", answerKey: 'personal_details', fields: [{ name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' }, { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' }, { name: 'mobile', label: 'Mobile Number', type: 'tel', required: true, placeholder: '04XX XXX XXX' }, { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' }, { name: 'dob', label: 'Date of Birth', type: 'date', required: true }], condition: () => 3 },
+            { id: 3, type: 'radio', title: "What is your current employment status?", explanation: "Eligibility for the funded program requires full-time or part-time contracted employment, as the program is structured as a Traineeship.", answerKey: 'employment_status', options: [{ value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" }, { value: 'casual', text: "I am employed on a casual basis.", description: "This status is generally not eligible for the Traineeship program.", icon: "⏳" }, { value: 'unemployed', text: "I am currently not employed.", description: "This status is generally not eligible for the Traineeship program.", icon: "🛋️" }], condition: (ans) => ans === 'contracted' ? 4 : 'ineligible_non_contracted' },
+            { id: 4, type: 'radio', title: "Do you hold or are you completing a Certificate III in Dental Assisting?", explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.", answerKey: 'prior_cert3', options: [{ value: 'yes', text: "Yes, I hold or am completing the Cert III.", description: "Let's check your eligibility for Cert IV!", icon: "🎓" }, { value: 'no', text: "No, I do not have a Cert III.", description: "You will likely start with the Certificate III Traineeship.", icon: "📖" }], condition: (ans) => ans === 'yes' ? 5 : 7 },
+            { id: 5, type: 'radio', title: "If completed, was your Cert III finished more than 3 months ago?", explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.", answerKey: 'completion_time', options: [{ value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" }, { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }], condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' },
+            { id: 6, type: 'radio', title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?", explanation: "Prior completion of a higher-level course may affect the level of subsidy (fully funded vs. co-payment) you are eligible for.", answerKey: 'prior_funding', options: [{ value: 'no', text: "No, this is my first government-funded qualification at this level.", description: "You are most likely eligible for the highest level of State funding.", icon: "✅" }, { value: 'yes', text: "Yes, I have completed a Cert IV, Diploma, or higher previously.", description: "You may still be eligible for a State Co-Payment subsidy.", icon: "⚠️" }], condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co' },
+            { id: 7, type: 'radio', title: "Is your employer willing to sponsor you as a trainee?", explanation: "For the Cert III Traineeship, the course must be structured as an agreement between you, your employer, and the training provider.", answerKey: 'sponsor_willing', options: [{ value: 'yes', text: "Yes, my employer is ready to sponsor me.", description: "This confirms your eligibility for a Fee-Free Cert III Traineeship.", icon: "🤝" }, { value: 'no', text: "No, I'm just looking for personal study (not a traineeship).", description: "You will proceed to the general State Funding eligibility check.", icon: "👤" }], condition: (ans) => ans === 'yes' ? 'outcome_path_2' : 6 }
+        ];
+
+        const outcomes = {
+            'ineligible_nsw': { title: "Not Eligible for NSW Funding", message: "Unfortunately, our current fully-funded and subsidised programs require you to be a resident of New South Wales. We recommend looking for training providers in your local state.", program: "No Enrolment", category: "Not Eligible" },
+            'ineligible_sbat': { title: "School-Based Traineeship Pathway Required", message: "As you are under 18, you fall under the School-Based Traineeship (SBAT) pathway. Please contact your school's Careers Advisor or our enrolment team directly to discuss SBAT options.", program: "SBAT (Cert III)", category: "SBAT" },
+            'ineligible_non_contracted': { title: "Not Eligible for Traineeship Program", message: "This specific funded program is structured as a Traineeship, which requires you to be a contracted (full-time or part-time) employee in a dental assisting role. Based on your employment status, you are not eligible for this funding stream. Please contact us to discuss fee-paying options.", program: "No Enrolment", category: "Not Eligible" },
+            'outcome_path_1': { title: "Path 1: Fee-Free Traineeship (Cert IV)", message: "You are highly likely to be eligible for the <strong>Certificate IV in Dental Assisting Traineeship</strong>. As you have recently completed (or are about to complete) a Cert III, you can access a fee-free traineeship for your elevation training.", program: "Certificate IV in Dental Assisting (Traineeship)", category: "Fee-free traineeship" },
+            'outcome_path_2': { title: "Path 2: Fee-Free Traineeship (Cert III)", message: "You are highly likely to be eligible for the <strong>Certificate III in Dental Assisting Traineeship</strong>. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.", program: "Certificate III in Dental Assisting (Traineeship)", category: "Fee-free traineeship" },
+            'outcome_path_3': { title: "Path 3: Cert IV with Co-payment Funding", message: "You are eligible for the <strong>Certificate IV in Dental Assisting</strong> qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student or employer.", program: "Certificate IV in Dental Assisting (EFQ Pool)", category: "State-based co-payment" },
+            'outcome_funding_fully': { title: "Fully Funded / High Subsidy Eligibility", message: "Based on your employment and study history, you are highly likely to be eligible for a <strong>State-based fully funded</strong> or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).", program: "Certificate III in Dental Assisting (Student)", category: "State-based fully funded" },
+            'outcome_funding_co': { title: "State Co-payment / Fee-Paying Eligibility", message: "Due to your prior completion of a government-funded VET qualification, you may fall into the <strong>State-based funded co-payment</strong> to help pay for your studies. If you are not eligible for any subsidy, you will need to pay the full fee. We will confirm the exact fee upon submission.", program: "Certificate III/IV in Dental Assisting (Student)", category: "State-based co-payment / Fee-paying student" },
+            'error_generic': { title: "Quiz Error", message: "An unexpected error occurred in the quiz flow. Please try restarting, or contact us for direct assistance.", program: "Error", category: "Error" }
+        };
+
+        // --- Global Functions accessible by inline HTML ---
+        window.nextStep = nextStep;
+        window.enableButton = enableButton;
+        window.validateInputFields = validateInputFields; // Exposed for change/keyup listeners
+        
+        // Expose startQuiz to window so it can be called by the restart button and the init
+        window.startQuiz = function() {
+            if (!isAuthReady) {
+                document.getElementById('step-content').innerHTML = '<p class="text-center text-gray-500">Waiting for authentication to complete...</p>';
+                return;
+            }
             currentStepIndex = 0;
             currentVisibleStep = 1;
             answers = {};
             document.getElementById('next-button').classList.remove('hidden');
             document.getElementById('restart-button').classList.add('hidden');
+            document.getElementById('save-status-message').classList.add('hidden');
             renderStep(currentStepIndex);
         }
 
         // Initialize the quiz on load
-        window.onload = startQuiz;
+        window.onload = initializeFirebase;
 
     </script>
 
