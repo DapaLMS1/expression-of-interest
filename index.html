@@ -57,9 +57,9 @@
     </div>
 
     <script type="module">
-        // FIX: Consolidated Firebase imports, as they were duplicated and causing a module loading error.
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        // setLogLevel is imported from the Firestore module
         import { getFirestore, collection, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // State management
@@ -114,7 +114,8 @@
 
         async function initializeFirebase() {
             try {
-                // setLogLevel('debug'); // Uncomment for debugging in console
+                // *** ACTIVATING DEBUG LOGGING: Look for 'Permission denied' in the console! ***
+                setLogLevel('debug'); 
 
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -200,11 +201,13 @@
                 category: outcome.category,
                 personal_details: answers['personal_details'],
                 full_submission_text: submissionText, // The required concatenated string
-                raw_answers: answers
+                raw_answers: answers,
+                // Add userId for clear reference within the document
+                submitter_id: userId 
             };
 
             try {
-                // Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
+                // Correct Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
                 const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
                 
                 // Use the timestamp for a unique document ID
@@ -213,7 +216,7 @@
                 saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
                 saveStatusEl.innerHTML = `✅ Result saved successfully!`;
             } catch (error) {
-                console.error("Firestore Save Error:", error);
+                console.error("Firestore Save Error (Client-side caught):", error);
                 saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
                 saveStatusEl.textContent = `Error saving data: ${error.message}.`;
             }
@@ -487,7 +490,7 @@
         // --- Global Functions accessible by inline HTML ---
         window.nextStep = nextStep;
         window.enableButton = enableButton;
-        window.validateInputFields = validateInputFields; // Exposed for change/keyup listeners
+        window.validateInputFields = validateInputFields; 
         
         // Expose startQuiz to window so it can be called by the restart button and the init
         window.startQuiz = function() {
