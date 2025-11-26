@@ -209,7 +209,7 @@
 
             try {
                 // Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
-                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
+                const collectionRef = collection(db, 'eoi', appId, 'users', userId, 'eligibility_submissions');
                 
                 // Use the timestamp for a unique document ID
                 await setDoc(doc(collectionRef, timestamp.replace(/[:.]/g, '-')), submissionData);
