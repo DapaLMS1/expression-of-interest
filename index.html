@@ -159,13 +159,18 @@
 
         // --- Data Persistence ---
 
+        // Helper function for exponential backoff
+        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
         function constructSubmissionText(answers) {
             let submissionText = [];
 
             // 1. Personal Details (Text Input Step 8)
             const details = answers['personal_details'];
             if (details) {
-                submissionText.push(`Applicant Details: ${details.first_name} ${details.last_name}, Mobile: ${details.mobile}, Email: ${details.email}, DOB: ${details.dob}.`);
+                // Ensure mobile is the cleaned version (10 digits)
+                const mobileDisplay = (details.mobile || '').replace(/(\d{4})(\d{3})(\d{3})/, '$1 $2 $3');
+                submissionText.push(`Applicant Details: ${details.first_name} ${details.last_name}, Mobile: ${mobileDisplay}, Email: ${details.email}, DOB: ${details.dob}.`);
             }
 
             // 2. Question/Radio Answers (In order of potential appearance)
@@ -179,19 +184,9 @@
             return submissionText.join(" ");
         }
 
-
-        async function saveSubmission(outcomeKey) {
+        async function saveSubmissionWithRetry(outcomeKey) {
             const saveStatusEl = document.getElementById('save-status-message');
-            saveStatusEl.classList.remove('hidden', 'text-green-600', 'text-red-600');
-            saveStatusEl.classList.add('text-gray-500');
-            saveStatusEl.innerHTML = `
-                <svg class="animate-spin -ml-1 mr-3 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Saving result...
-            `;
-
+            
             if (!isAuthReady || !userId) {
                 console.error("Attempted to save before auth was ready.");
                 saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
@@ -227,23 +222,53 @@
                 submitter_id: userId 
             };
 
-            try {
-                // Correct Private data path: /artifacts/{appId}/users/{userId}/dental_assisting_quiz_results/{docId}
-                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, collectionName);
+            const maxRetries = 5;
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    saveStatusEl.innerHTML = `
+                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Saving result (Attempt ${attempt}/${maxRetries})...
+                    `;
+                    saveStatusEl.classList.remove('hidden', 'text-green-600', 'text-red-600');
+                    saveStatusEl.classList.add('text-gray-500');
 
-                // *** LOGGING THE EXACT PATH FOR DEBUGGING ***
-                console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/${collectionName}/${docId}`);
-                
-                await setDoc(doc(collectionRef, docId), submissionData);
+                    // Correct Private data path: /artifacts/{appId}/users/{userId}/dental_assisting_quiz_results/{docId}
+                    const collectionRef = collection(db, 'artifacts', appId, 'users', userId, collectionName);
 
-                saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
-                saveStatusEl.innerHTML = `✅ Result saved successfully!`;
-            } catch (error) {
-                console.error("Firestore Save Error (Client-side caught):", error);
-                saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
-                saveStatusEl.textContent = `Error saving data: ${error.message}.`;
+                    // LOGGING THE EXACT PATH FOR DEBUGGING 
+                    console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/${collectionName}/${docId}`);
+                    
+                    await setDoc(doc(collectionRef, docId), submissionData);
+
+                    // SUCCESS
+                    saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
+                    saveStatusEl.innerHTML = `✅ Result saved successfully!`;
+                    return;
+
+                } catch (error) {
+                    if (attempt === maxRetries) {
+                        // FINAL FAILURE
+                        console.error("Firestore Save Error (Client-side caught):", error);
+                        saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
+                        // Use a specific message if the error is likely a permission issue
+                        let errorMessage = error.message;
+                        if (error.code && (error.code.includes('permission-denied') || error.code.includes('unauthenticated'))) {
+                            errorMessage = "Permission Denied. Check Firebase Security Rules!";
+                        }
+                        saveStatusEl.textContent = `Error saving data after ${maxRetries} attempts: ${errorMessage}`;
+                        return;
+                    }
+                    
+                    // RETRY
+                    const delay = Math.pow(2, attempt) * 1000; // Exponential delay: 2s, 4s, 8s, 16s...
+                    await wait(delay);
+                }
             }
         }
+
 
         // --- Quiz Logic (Externalized for module access) ---
 
@@ -375,8 +400,8 @@
                 </div>
             `;
             
-            // --- FIREBASE ACTION: Save the final result ---
-            saveSubmission(outcomeKey);
+            // --- FIREBASE ACTION: Save the final result using the retry mechanism ---
+            saveSubmissionWithRetry(outcomeKey);
         }
 
         function enableButton() {
@@ -407,6 +432,7 @@
                         warning.classList.remove('hidden');
                         allValid = false;
                     } else {
+                        // Display formatted mobile number, but save the clean version
                         input.value = `${cleanedMobile.substring(0, 4)} ${cleanedMobile.substring(4, 7)} ${cleanedMobile.substring(7, 10)}`;
                         currentAnswers[field.name] = cleanedMobile; 
                         warning.classList.add('hidden');
@@ -427,6 +453,7 @@
                 
                 else if (input.value && input.type === 'date') {
                     const today = new Date().toISOString().split('T')[0];
+                    // Check if date is in the future
                     if (input.value > today) {
                         allValid = false;
                     }
@@ -459,6 +486,7 @@
                     const dobString = answers[step.answerKey]['dob'];
                     const age = calculateAge(dobString);
                     
+                    // The age check needs to happen here before proceeding to the next step
                     if (age < 18) {
                         nextId = 'ineligible_sbat';
                     } else {
@@ -490,7 +518,7 @@
         const steps = [
             { id: 1, type: 'radio', title: "Where are you currently located?", explanation: "To be eligible for NSW funding programs, you must be in New South Wales.", answerKey: 'nsw_resident', options: [{ value: 'yes', text: "Yes, I currently live or work in NSW", description: "This is step one on our journey!", icon: "🏡" }, { value: 'no', text: "No, I'm outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }], condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2 },
             { id: 2, type: 'radio', title: "Are you over 18 years of age?", explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.", answerKey: 'over_18', options: [{ value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" }, { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }], condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 8 },
-            { id: 8, type: 'input', title: "Your Contact Details", explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.", answerKey: 'personal_details', fields: [{ name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' }, { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' }, { name: 'mobile', label: 'Mobile Number', type: 'tel', required: true, placeholder: '04XX XXX XXX' }, { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' }, { name: 'dob', label: 'Date of Birth', type: 'date', required: true }], condition: () => 3 },
+            { id: 8, type: 'input', title: "Your Contact Details", explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.", answerKey: 'personal_details', fields: [{ name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' }, { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' }, { name: 'mobile', label: 'Mobile Number (10 digits)', type: 'tel', required: true, placeholder: '04XX XXX XXX' }, { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' }, { name: 'dob', label: 'Date of Birth', type: 'date', required: true }], condition: () => 3 },
             { id: 3, type: 'radio', title: "What is your current employment status?", explanation: "Eligibility for the funded program requires full-time or part-time contracted employment, as the program is structured as a Traineeship.", answerKey: 'employment_status', options: [{ value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" }, { value: 'casual', text: "I am employed on a casual basis.", description: "This status is generally not eligible for the Traineeship program.", icon: "⏳" }, { value: 'unemployed', text: "I am currently not employed.", description: "This status is generally not eligible for the Traineeship program.", icon: "🛋️" }], condition: (ans) => ans === 'contracted' ? 4 : 'ineligible_non_contracted' },
             { id: 4, type: 'radio', title: "Do you hold or are you completing a Certificate III in Dental Assisting?", explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.", answerKey: 'prior_cert3', options: [{ value: 'yes', text: "Yes, I hold or am completing the Cert III.", description: "Let's check your eligibility for Cert IV!", icon: "🎓" }, { value: 'no', text: "No, I do not have a Cert III.", description: "You will likely start with the Certificate III Traineeship.", icon: "📖" }], condition: (ans) => ans === 'yes' ? 5 : 7 },
             { id: 5, type: 'radio', title: "If completed, was your Cert III finished more than 3 months ago?", explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.", answerKey: 'completion_time', options: [{ value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" }, { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }], condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' },
