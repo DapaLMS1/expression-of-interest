@@ -200,15 +200,27 @@
             }
 
             const outcome = outcomes[outcomeKey];
-            const timestamp = new Date().toISOString();
+            const timestamp = new Date();
             const submissionText = constructSubmissionText(answers);
+            
+            // Extract and clean name fields for a better document ID
+            const details = answers['personal_details'] || {};
+            const lastName = (details.last_name || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const firstName = (details.first_name || 'applicant').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const shortTimestamp = timestamp.toISOString().substring(0, 10).replace(/-/g, ''); // YYYYMMDD
+            
+            // New, more memorable document ID format: LastName_FirstName_YYYYMMDD
+            const docId = `${lastName}_${firstName}_${shortTimestamp}_${timestamp.getTime()}`.substring(0, 80); // Ensure docId is not excessively long
+            
+            // New, memorable collection name
+            const collectionName = 'dental_assisting_quiz_results'; 
 
             const submissionData = {
-                timestamp: timestamp,
+                timestamp: timestamp.toISOString(),
                 outcome_key: outcomeKey,
                 program: outcome.program,
                 category: outcome.category,
-                personal_details: answers['personal_details'],
+                personal_details: details,
                 full_submission_text: submissionText, // The required concatenated string
                 raw_answers: answers,
                 // Add userId for clear reference within the document
@@ -216,14 +228,12 @@
             };
 
             try {
-                // Correct Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
-                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
-                const docId = timestamp.replace(/[:.]/g, '-');
+                // Correct Private data path: /artifacts/{appId}/users/{userId}/dental_assisting_quiz_results/{docId}
+                const collectionRef = collection(db, 'artifacts', appId, 'users', userId, collectionName);
 
                 // *** LOGGING THE EXACT PATH FOR DEBUGGING ***
-                console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/eligibility_submissions/${docId}`);
+                console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/${collectionName}/${docId}`);
                 
-                // Use the timestamp for a unique document ID
                 await setDoc(doc(collectionRef, docId), submissionData);
 
                 saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
