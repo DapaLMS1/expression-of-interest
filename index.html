@@ -18,531 +18,569 @@
             font-size: 0.875rem; /* text-sm */
             margin-top: 0.25rem; /* mt-1 */
         }
+        .text-shadow {
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
     </style>
 </head>
 <body class="min-h-screen flex items-center justify-center p-4">
 
-    <div id="quiz-container" class="w-full max-w-lg bg-white shadow-2xl rounded-xl p-8 transition duration-500 ease-in-out transform hover:scale-[1.01]">
-        
-        <!-- Status and User ID -->
-        <div class="mb-4 text-xs text-gray-500 space-y-1">
-            <div id="auth-status">Initializing services...</div>
-            <div id="user-id-display" class="hidden font-mono">User ID: <span id="user-id-value"></span></div>
-        </div>
+    <div id="quiz-container" class="w-full max-w-lg bg-white shadow-2xl rounded-xl p-8 transition duration-500">
+        <h1 class="text-3xl font-bold text-center text-blue-700 mb-6 text-shadow">
+            Dental Assisting Eligibility
+        </h1>
 
-        <!-- Progress Bar -->
-        <div class="mb-6">
-            <div class="text-sm font-medium text-gray-500 mb-1">Question <span id="current-step-display">1</span> of 6</div>
-            <div class="w-full bg-gray-200 rounded-full h-2.5">
-                <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+        <!-- Step Counter / Progress -->
+        <div id="progress-container" class="mb-6">
+            <div class="h-2 bg-gray-200 rounded-full">
+                <div id="progress-bar" class="h-2 bg-blue-500 rounded-full transition-all duration-300" style="width: 0;"></div>
             </div>
+            <p id="step-counter" class="text-sm text-center text-gray-500 mt-2">Step 1 of 5</p>
         </div>
 
-        <!-- Dynamic Content Area -->
-        <div id="step-content">
-            <p class="text-center text-gray-500">Loading quiz...</p>
-            <!-- Steps will be injected here -->
+        <!-- Main Content Area -->
+        <div id="step-content" class="min-h-[200px] mb-6">
+            <p class="text-center text-gray-500">Loading...</p>
         </div>
 
-        <!-- Action Button -->
-        <div class="mt-8 pt-4 border-t border-gray-100">
-            <div id="save-status-message" class="text-center text-sm font-medium mb-3 hidden"></div>
-            <button id="next-button" onclick="nextStep()" class="w-full py-3 bg-blue-600 text-white font-semibold text-lg rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-500 focus:ring-opacity-50 transition duration-150 transform hover:scale-[1.02]" disabled>
-                Continue
+        <!-- Action Buttons -->
+        <div class="flex flex-col space-y-3">
+            <button id="next-button" onclick="nextStep()"
+                class="w-full py-3 px-6 bg-blue-600 text-white font-semibold rounded-lg shadow-lg hover:bg-blue-700 transition duration-300 disabled:opacity-50"
+                disabled>
+                Next Step
             </button>
-            <button id="restart-button" onclick="startQuiz()" class="hidden w-full py-3 mt-3 bg-gray-500 text-white font-semibold text-lg rounded-lg shadow-md hover:bg-gray-600 focus:outline-none focus:ring-4 focus:ring-gray-400 focus:ring-opacity-50 transition duration-150 transform hover:scale-[1.02]">
-                Start Again
+            <button id="restart-button" onclick="startQuiz()"
+                class="w-full py-3 px-6 bg-green-500 text-white font-semibold rounded-lg shadow-lg hover:bg-green-600 transition duration-300 hidden">
+                Restart Quiz
+            </button>
+            <button id="history-button" onclick="renderHistory()"
+                class="w-full py-2 px-6 bg-gray-200 text-gray-700 font-semibold rounded-lg hover:bg-gray-300 transition duration-300 hidden">
+                View My Results History
             </button>
         </div>
+
+        <!-- Status Messages -->
+        <p id="save-status-message" class="text-sm mt-4 text-center hidden"></p>
+        
+        <!-- User ID Display (MANDATORY for multi-user apps) -->
+        <p id="user-id-display" class="text-xs text-gray-400 mt-6 text-center break-all">User ID: Loading...</p>
     </div>
 
+    <!-- Firebase SDK Imports (MUST BE loaded before script block) -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // setLogLevel is imported from the Firestore module
-        import { getFirestore, collection, doc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // State management
-        let currentStepIndex = 0; 
-        let currentVisibleStep = 1; 
-        let answers = {};
-        const MAX_STEPS = 6;
-        let db;
-        let auth;
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, where, getDocs, Timestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- Globals to be initialized ---
+        let app = null;
+        let db = null;
+        let auth = null;
         let userId = null;
         let isAuthReady = false;
-        
-        // Safety check and environment setup
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-        // Configuration mapping for converting radio values to plain English sentences
-        const answerTextMapping = {
-            'nsw_resident': {
-                'yes': "I currently live or work in NSW.",
-                'no': "I am located outside of NSW."
-            },
-            'over_18': {
-                'yes': "I am 18 or older.",
-                'no': "I am under 18 years old."
-            },
-            'employment_status': {
-                'contracted': "I am a full-time or part-time contracted employee.",
-                'casual': "I am employed on a casual basis.",
-                'unemployed': "I am currently not employed."
-            },
-            'prior_cert3': {
-                'yes': "I hold or am completing a Certificate III in Dental Assisting.",
-                'no': "I do not have a Cert III in Dental Assisting."
-            },
-            'completion_time': {
-                'yes': "My Cert III was completed more than 3 months ago.",
-                'no': "My Cert III was completed recently or is still in progress."
-            },
-            'prior_funding': {
-                'no': "I have not previously completed a government-funded VET qualification (Cert IV or higher).",
-                'yes': "I have previously completed a government-funded VET qualification (Cert IV or higher)."
-            },
-            'sponsor_willing': {
-                'yes': "My employer is willing to sponsor me as a trainee.",
-                'no': "I am looking for personal study, not a traineeship."
+        // --- Auth & Init Function ---
+        window.initializeFirebase = async function() {
+            setLogLevel('debug'); // Enable Firestore logging
+
+            // Global variables provided by the environment (MANDATORY USE)
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+            const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+            if (Object.keys(firebaseConfig).length === 0) {
+                console.error("Firebase config is missing.");
+                document.getElementById('step-content').innerHTML = '<p class="text-center text-red-500">Error: Firebase configuration missing.</p>';
+                return;
             }
-        };
 
-        // --- Firebase Initialization and Auth ---
-
-        async function initializeFirebase() {
             try {
-                // *** ACTIVATING DEBUG LOGGING: Look for 'Permission denied' in the console! ***
-                setLogLevel('debug'); 
-                
-                // CRITICAL CHECK: If running outside the environment, firebaseConfig will be empty, 
-                // which causes the "projectId" error. We stop here and give a clear message.
-                if (Object.keys(firebaseConfig).length === 0) {
-                    const message = "Configuration Error: Firebase config is missing. This usually happens when the file is run directly in a browser (outside the Canvas environment) without a local configuration provided. If you intend to run this locally, you must replace `firebaseConfig`'s fallback `{}` with your actual configuration object.";
-                    console.error(message);
-                    document.getElementById('auth-status').textContent = `Initialization Error: ${message}`;
-                    return; // Stop initialization
-                }
-
-                const app = initializeApp(firebaseConfig);
+                app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                
-                // 1. Authenticate the user
+
+                // Sign in using the custom token or anonymously if the token is missing
                 if (initialAuthToken) {
                     await signInWithCustomToken(auth, initialAuthToken);
                 } else {
                     await signInAnonymously(auth);
                 }
 
-                // 2. Set up listener to get user ID and mark ready
+                // Set up auth state change listener
                 onAuthStateChanged(auth, (user) => {
                     if (user) {
                         userId = user.uid;
-                        document.getElementById('user-id-value').textContent = userId;
-                        document.getElementById('user-id-display').classList.remove('hidden');
-                        document.getElementById('auth-status').textContent = 'Services ready.';
                         isAuthReady = true;
-                        startQuiz(); // Start the quiz once authenticated
+                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        // Start the quiz/initial view now that we are authenticated
+                        window.startQuiz();
+                        // Make Firestore instances available globally
+                        window.db = db;
+                        window.auth = auth;
+                        window.userId = userId;
+                        window.appId = appId; // Pass appId to global scope
+                        document.getElementById('history-button').classList.remove('hidden');
                     } else {
-                        document.getElementById('auth-status').textContent = 'Failed to authenticate.';
+                        userId = null;
+                        isAuthReady = true; // Still ready, just unauthenticated (shouldn't happen here)
+                        document.getElementById('user-id-display').textContent = `User ID: Not Signed In`;
+                        window.startQuiz(); // Attempt to start even if unauthenticated
                     }
                 });
 
             } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                document.getElementById('auth-status').textContent = `Initialization Error: ${error.message}`;
+                console.error("Firebase initialization or authentication failed:", error);
+                document.getElementById('step-content').innerHTML = '<p class="text-center text-red-500">Authentication Error: See console.</p>';
             }
-        }
-
-        // --- Data Persistence ---
-
-        // Helper function for exponential backoff
-        const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-        function constructSubmissionText(answers) {
-            let submissionText = [];
-
-            // 1. Personal Details (Text Input Step 8)
-            const details = answers['personal_details'];
-            if (details) {
-                // Ensure mobile is the cleaned version (10 digits)
-                const mobileDisplay = (details.mobile || '').replace(/(\d{4})(\d{3})(\d{3})/, '$1 $2 $3');
-                submissionText.push(`Applicant Details: ${details.first_name} ${details.last_name}, Mobile: ${mobileDisplay}, Email: ${details.email}, DOB: ${details.dob}.`);
-            }
-
-            // 2. Question/Radio Answers (In order of potential appearance)
-            for (const key of ['nsw_resident', 'over_18', 'employment_status', 'prior_cert3', 'sponsor_willing', 'completion_time', 'prior_funding']) {
-                const answerValue = answers[key];
-                if (answerValue && answerTextMapping[key] && answerTextMapping[key][answerValue]) {
-                    submissionText.push(answerTextMapping[key][answerValue]);
-                }
-            }
-
-            return submissionText.join(" ");
-        }
-
-        async function saveSubmissionWithRetry(outcomeKey) {
-            const saveStatusEl = document.getElementById('save-status-message');
-            
-            if (!isAuthReady || !userId) {
-                console.error("Attempted to save before auth was ready.");
-                saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
-                saveStatusEl.textContent = "Error: Authentication not complete. Result not saved.";
-                return;
-            }
-
-            const outcome = outcomes[outcomeKey];
-            const timestamp = new Date();
-            const submissionText = constructSubmissionText(answers);
-            
-            // Extract and clean name fields for a better document ID
-            const details = answers['personal_details'] || {};
-            const lastName = (details.last_name || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '');
-            const firstName = (details.first_name || 'applicant').toLowerCase().replace(/[^a-z0-9]/g, '');
-            const shortTimestamp = timestamp.toISOString().substring(0, 10).replace(/-/g, ''); // YYYYMMDD
-            
-            // New, more memorable document ID format: LastName_FirstName_YYYYMMDD_Timestamp
-            const docId = `${lastName}_${firstName}_${shortTimestamp}_${timestamp.getTime()}`.substring(0, 80); // Ensure docId is not excessively long
-            
-            // New, memorable collection name
-            const collectionName = 'dental_assisting_quiz_results'; 
-
-            const submissionData = {
-                timestamp: timestamp.toISOString(),
-                outcome_key: outcomeKey,
-                program: outcome.program,
-                category: outcome.category,
-                personal_details: details,
-                full_submission_text: submissionText, // The required concatenated string
-                raw_answers: answers,
-                // Add userId for clear reference within the document
-                submitter_id: userId 
-            };
-
-            const maxRetries = 5;
-            for (let attempt = 1; attempt <= maxRetries; attempt++) {
-                try {
-                    saveStatusEl.innerHTML = `
-                        <svg class="animate-spin -ml-1 mr-3 h-5 w-5 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Saving result (Attempt ${attempt}/${maxRetries})...
-                    `;
-                    saveStatusEl.classList.remove('hidden', 'text-green-600', 'text-red-600');
-                    saveStatusEl.classList.add('text-gray-500');
-
-                    // Correct Private data path: /artifacts/{appId}/users/{userId}/dental_assisting_quiz_results/{docId}
-                    const collectionRef = collection(db, 'artifacts', appId, 'users', userId, collectionName);
-
-                    // LOGGING THE EXACT PATH FOR DEBUGGING 
-                    console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/${collectionName}/${docId}`);
-                    
-                    await setDoc(doc(collectionRef, docId), submissionData);
-
-                    // SUCCESS
-                    saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
-                    saveStatusEl.innerHTML = `✅ Result saved successfully!`;
-                    return;
-
-                } catch (error) {
-                    if (attempt === maxRetries) {
-                        // FINAL FAILURE
-                        console.error("Firestore Save Error (Client-side caught):", error);
-                        saveStatusEl.classList.replace('text-gray-500', 'text-red-600');
-                        // Use a specific message if the error is likely a permission issue
-                        let errorMessage = error.message;
-                        if (error.code && (error.code.includes('permission-denied') || error.code.includes('unauthenticated'))) {
-                            errorMessage = "Permission Denied. Check Firebase Security Rules!";
-                        }
-                        saveStatusEl.textContent = `Error saving data after ${maxRetries} attempts: ${errorMessage}`;
-                        return;
-                    }
-                    
-                    // RETRY
-                    const delay = Math.pow(2, attempt) * 1000; // Exponential delay: 2s, 4s, 8s, 16s...
-                    await wait(delay);
-                }
-            }
-        }
-
-
-        // --- Quiz Logic (Externalized for module access) ---
-
-        function calculateAge(dobString) {
-            const today = new Date();
-            const dob = new Date(dobString);
-            let age = today.getFullYear() - dob.getFullYear();
-            const monthDifference = today.getMonth() - dob.getMonth();
-            if (monthDifference < 0 || (monthDifference === 0 && today.getDate() < dob.getDate())) {
-                age--;
-            }
-            return age;
-        }
-
-        function updateProgress() {
-            const progress = (currentVisibleStep / MAX_STEPS) * 100;
-            document.getElementById('progress-bar').style.width = `${progress}%`;
-            document.getElementById('current-step-display').textContent = currentVisibleStep;
-        }
-
-        function renderStep(stepIndex) {
-            const step = steps[stepIndex];
-            if (!step) return;
-
-            currentStepIndex = stepIndex;
-            updateProgress();
-
-            const contentDiv = document.getElementById('step-content');
-            const nextButton = document.getElementById('next-button');
-
-            contentDiv.innerHTML = `
-                <h2 class="text-2xl font-bold text-gray-800 mb-2">${currentVisibleStep}. ${step.title}</h2>
-                <p class="text-sm text-gray-600 mb-6 border-l-4 border-yellow-400 pl-3 py-1 bg-yellow-50 rounded-md">${step.explanation}</p>
-                <div class="${step.type === 'radio' ? 'options-container' : 'input-container'}" id="step-form-content">
-                    ${step.type === 'radio' ? renderRadioOptions(step) : renderInputFields(step)}
-                </div>
-            `;
-            
-            if (step.type === 'input') {
-                const formContent = document.getElementById('step-form-content');
-                formContent.addEventListener('keyup', validateInputFields);
-                formContent.addEventListener('change', validateInputFields);
-            }
-            
-            nextButton.textContent = 'Continue';
-            nextButton.disabled = true;
-            document.getElementById('restart-button').classList.add('hidden');
-            document.getElementById('save-status-message').classList.add('hidden');
-
-            if (answers[step.answerKey]) {
-                if (step.type === 'radio') {
-                    document.querySelector(`input[name="${step.answerKey}"][value="${answers[step.answerKey]}"]`).checked = true;
-                    enableButton();
-                } else if (step.type === 'input') {
-                    step.fields.forEach(field => {
-                        const input = document.querySelector(`input[name="${field.name}"]`);
-                        if (input && answers[step.answerKey][field.name]) {
-                            input.value = answers[step.answerKey][field.name];
-                        }
-                    });
-                    validateInputFields();
-                }
-            }
-        }
-
-        function renderRadioOptions(step) {
-            return step.options.map(option => `
-                <label class="block mb-4 cursor-pointer">
-                    <input type="radio" name="${step.answerKey}" value="${option.value}" class="hidden peer" onchange="enableButton()">
-                    <div class="p-4 bg-white border-2 border-gray-200 rounded-xl shadow-sm hover:border-blue-500 peer-checked:border-blue-600 peer-checked:bg-blue-50 transition duration-200">
-                        <div class="flex items-start">
-                            <span class="text-3xl mr-4">${option.icon}</span>
-                            <div>
-                                <p class="text-gray-900 font-semibold text-lg">${option.text}</p>
-                                <p class="text-sm text-gray-500 mt-1">${option.description}</p>
-                            </div>
-                        </div>
-                    </div>
-                </label>
-            `).join('');
-        }
-
-        function renderInputFields(step) {
-            return step.fields.map(field => `
-                <div class="mb-4">
-                    <label for="${field.name}" class="block text-sm font-medium text-gray-700 mb-1">${field.label}${field.required ? ' *' : ''}</label>
-                    <input 
-                        type="${field.type}" 
-                        id="${field.name}" 
-                        name="${field.name}" 
-                        placeholder="${field.placeholder || ''}"
-                        ${field.required ? 'required' : ''}
-                        ${field.pattern ? `pattern="${field.pattern}"` : ''}
-                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150"
-                    >
-                    ${(field.name === 'mobile' || field.name === 'email') ? `<p id="${field.name}-warning" class="input-warning hidden"></p>` : ''}
-                </div>
-            `).join('');
-        }
-
-        function renderOutcome(outcomeKey) {
-            const outcome = outcomes[outcomeKey];
-            const contentDiv = document.getElementById('step-content');
-            document.getElementById('next-button').classList.add('hidden');
-            document.getElementById('restart-button').classList.remove('hidden');
-
-            document.getElementById('progress-bar').style.width = `100%`;
-            document.getElementById('current-step-display').textContent = MAX_STEPS;
-
-            contentDiv.innerHTML = `
-                <div class="text-center py-6 ${outcomeKey.startsWith('ineligible') ? 'bg-red-100' : 'bg-blue-100'} rounded-xl mb-6">
-                    <svg class="w-12 h-12 ${outcomeKey.startsWith('ineligible') ? 'text-red-600' : 'text-blue-600'} mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    <h2 class="text-2xl font-bold ${outcomeKey.startsWith('ineligible') ? 'text-red-800' : 'text-blue-800'}">${outcome.title}</h2>
-                </div>
-                
-                <div class="space-y-4">
-                    <div class="p-4 bg-gray-50 rounded-lg">
-                        <p class="text-sm font-semibold text-gray-700">Recommended Program:</p>
-                        <p class="text-lg font-bold text-gray-900">${outcome.program}</p>
-                    </div>
-                    <div class="p-4 bg-gray-50 rounded-lg">
-                        <p class="text-sm font-semibold text-gray-700">Predicted Funding Category:</p>
-                        <p class="text-lg font-bold text-blue-600">${outcome.category}</p>
-                    </div>
-                    <div class="p-4 border-l-4 ${outcomeKey.startsWith('ineligible') ? 'border-red-400 bg-red-50' : 'border-blue-400 bg-blue-50'} rounded-lg">
-                        <p class="text-md text-gray-700">${outcome.message}</p>
-                        <p class="text-xs text-gray-500 mt-2 italic">Note: All eligibility is subject to final confirmation by the training provider upon EOI submission.</p>
-                    </div>
-                </div>
-            `;
-            
-            // --- FIREBASE ACTION: Save the final result using the retry mechanism ---
-            saveSubmissionWithRetry(outcomeKey);
-        }
-
-        function enableButton() {
-            document.getElementById('next-button').disabled = false;
-        }
-
-        function validateInputFields() {
-            const step = steps[currentStepIndex];
-            if (step.type !== 'input') return;
-            
-            let allValid = true;
-            let currentAnswers = {};
-
-            step.fields.forEach(field => {
-                const input = document.getElementById(field.name);
-                currentAnswers[field.name] = input.value;
-                
-                if (field.required && !input.value.trim()) {
-                    allValid = false;
-                } 
-                
-                if (field.name === 'mobile') {
-                    const warning = document.getElementById('mobile-warning');
-                    const cleanedMobile = input.value.replace(/\D/g, ''); 
-
-                    if (cleanedMobile.length !== 10) {
-                        warning.textContent = "Mobile number must be exactly 10 digits (e.g., 04XX XXX XXX).";
-                        warning.classList.remove('hidden');
-                        allValid = false;
-                    } else {
-                        // Display formatted mobile number, but save the clean version
-                        input.value = `${cleanedMobile.substring(0, 4)} ${cleanedMobile.substring(4, 7)} ${cleanedMobile.substring(7, 10)}`;
-                        currentAnswers[field.name] = cleanedMobile; 
-                        warning.classList.add('hidden');
-                    }
-                } 
-                
-                else if (field.name === 'email') {
-                    const warning = document.getElementById('email-warning');
-                    if (!/\S+@\S+\.\S+/.test(input.value)) {
-                        warning.textContent = "Please enter a valid email address format (user@domain.com).";
-                        warning.classList.remove('hidden');
-                        allValid = false;
-                    }
-                    else {
-                        warning.classList.add('hidden');
-                    }
-                }
-                
-                else if (input.value && input.type === 'date') {
-                    const today = new Date().toISOString().split('T')[0];
-                    // Check if date is in the future
-                    if (input.value > today) {
-                        allValid = false;
-                    }
-                }
-            });
-
-            answers[step.answerKey] = currentAnswers;
-            document.getElementById('next-button').disabled = !allValid;
-        }
-
-
-        function nextStep() {
-            const step = steps[currentStepIndex];
-            if (!step) return;
-
-            let nextId;
-            let currentAnswer;
-
-            if (step.type === 'radio') {
-                const selectedOption = document.querySelector(`input[name="${step.answerKey}"]:checked`);
-                if (!selectedOption) return;
-                currentAnswer = selectedOption.value;
-                answers[step.answerKey] = currentAnswer;
-                nextId = step.condition(currentAnswer);
-            } else if (step.type === 'input') {
-                validateInputFields(); 
-                if (document.getElementById('next-button').disabled) return; 
-                
-                if (step.id === 8) {
-                    const dobString = answers[step.answerKey]['dob'];
-                    const age = calculateAge(dobString);
-                    
-                    // The age check needs to happen here before proceeding to the next step
-                    if (age < 18) {
-                        nextId = 'ineligible_sbat';
-                    } else {
-                        nextId = step.condition(); 
-                    }
-                } else {
-                    nextId = step.condition(); 
-                }
-            }
-            
-            if (typeof nextId === 'string') {
-                renderOutcome(nextId);
-                return;
-            }
-
-            const nextStepIndex = steps.findIndex(s => s.id === nextId);
-
-            if (nextStepIndex !== -1) {
-                currentVisibleStep++;
-                currentStepIndex = nextStepIndex;
-                renderStep(currentStepIndex);
-            } else {
-                console.error("Navigation error: Next step ID not found in steps array:", nextId);
-                renderOutcome('error_generic'); 
-            }
-        }
-
-        // --- Core Quiz Data ---
-        const steps = [
-            { id: 1, type: 'radio', title: "Where are you currently located?", explanation: "To be eligible for NSW funding programs, you must be in New South Wales.", answerKey: 'nsw_resident', options: [{ value: 'yes', text: "Yes, I currently live or work in NSW", description: "This is step one on our journey!", icon: "🏡" }, { value: 'no', text: "No, I'm outside of NSW", description: "You might not be eligible for NSW funding.", icon: "✈️" }], condition: (ans) => ans === 'no' ? 'ineligible_nsw' : 2 },
-            { id: 2, type: 'radio', title: "Are you over 18 years of age?", explanation: "Applicants under the age of 18 typically fall under School-Based Traineeship (SBAT) programs, which follow a different enrolment path.", answerKey: 'over_18', options: [{ value: 'yes', text: "Yes, I am 18 or older", description: "Great! This qualifies for standard enrolment.", icon: "🎂" }, { value: 'no', text: "No, I am under 18", description: "You may need an SBAT pathway.", icon: "🎒" }], condition: (ans) => ans === 'no' ? 'ineligible_sbat' : 8 },
-            { id: 8, type: 'input', title: "Your Contact Details", explanation: "Please provide your details so we can assess your specific funding pathway and contact you with your result.", answerKey: 'personal_details', fields: [{ name: 'first_name', label: 'First Name', type: 'text', required: true, placeholder: 'Jane' }, { name: 'last_name', label: 'Last Name', type: 'text', required: true, placeholder: 'Doe' }, { name: 'mobile', label: 'Mobile Number (10 digits)', type: 'tel', required: true, placeholder: '04XX XXX XXX' }, { name: 'email', label: 'Email Address', type: 'email', required: true, placeholder: 'jane.doe@example.com' }, { name: 'dob', label: 'Date of Birth', type: 'date', required: true }], condition: () => 3 },
-            { id: 3, type: 'radio', title: "What is your current employment status?", explanation: "Eligibility for the funded program requires full-time or part-time contracted employment, as the program is structured as a Traineeship.", answerKey: 'employment_status', options: [{ value: 'contracted', text: "I am a full-time or part-time employee.", description: "You may be eligible for a Fee-Free Traineeship.", icon: "👨‍⚕️" }, { value: 'casual', text: "I am employed on a casual basis.", description: "This status is generally not eligible for the Traineeship program.", icon: "⏳" }, { value: 'unemployed', text: "I am currently not employed.", description: "This status is generally not eligible for the Traineeship program.", icon: "🛋️" }], condition: (ans) => ans === 'contracted' ? 4 : 'ineligible_non_contracted' },
-            { id: 4, type: 'radio', title: "Do you hold or are you completing a Certificate III in Dental Assisting?", explanation: "If you have prior qualifications, you may be eligible to fast-track to the Certificate IV qualification.", answerKey: 'prior_cert3', options: [{ value: 'yes', text: "Yes, I hold or am completing the Cert III.", description: "Let's check your eligibility for Cert IV!", icon: "🎓" }, { value: 'no', text: "No, I do not have a Cert III.", description: "You will likely start with the Certificate III Traineeship.", icon: "📖" }], condition: (ans) => ans === 'yes' ? 5 : 7 },
-            { id: 5, type: 'radio', title: "If completed, was your Cert III finished more than 3 months ago?", explanation: "The timeframe since your completion determines the type of full government subsidy your employer can access.", answerKey: 'completion_time', options: [{ value: 'yes', text: "Yes, it was completed over 3 months ago.", description: "This may fall under the limited Entitlement Full Qualification (EFQ) pool.", icon: "📅" }, { value: 'no', text: "No, it was completed recently (or is still in progress).", description: "You are likely eligible for a full Cert IV Traineeship subsidy.", icon: "✨" }], condition: (ans) => ans === 'yes' ? 'outcome_path_3' : 'outcome_path_1' },
-            { id: 6, type: 'radio', title: "Have you previously completed any government-funded VET qualification (Cert IV or higher)?", explanation: "Prior completion of a higher-level course may affect the level of subsidy (fully funded vs. co-payment) you are eligible for.", answerKey: 'prior_funding', options: [{ value: 'no', text: "No, this is my first government-funded qualification at this level.", description: "You are most likely eligible for the highest level of State funding.", icon: "✅" }, { value: 'yes', text: "Yes, I have completed a Cert IV, Diploma, or higher previously.", description: "You may still be eligible for a State Co-Payment subsidy.", icon: "⚠️" }], condition: (ans) => ans === 'no' ? 'outcome_funding_fully' : 'outcome_funding_co' },
-            { id: 7, type: 'radio', title: "Is your employer willing to sponsor you as a trainee?", explanation: "For the Cert III Traineeship, the course must be structured as an agreement between you, your employer, and the training provider.", answerKey: 'sponsor_willing', options: [{ value: 'yes', text: "Yes, my employer is ready to sponsor me.", description: "This confirms your eligibility for a Fee-Free Cert III Traineeship.", icon: "🤝" }, { value: 'no', text: "No, I'm just looking for personal study (not a traineeship).", description: "You will proceed to the general State Funding eligibility check.", icon: "👤" }], condition: (ans) => ans === 'yes' ? 'outcome_path_2' : 6 }
-        ];
-
-        const outcomes = {
-            'ineligible_nsw': { title: "Not Eligible for NSW Funding", message: "Unfortunately, our current fully-funded and subsidised programs require you to be a resident of New South Wales. We recommend looking for training providers in your local state.", program: "No Enrolment", category: "Not Eligible" },
-            'ineligible_sbat': { title: "School-Based Traineeship Pathway Required", message: "As you are under 18, you fall under the School-Based Traineeship (SBAT) pathway. Please contact your school's Careers Advisor or our enrolment team directly to discuss SBAT options.", program: "SBAT (Cert III)", category: "SBAT" },
-            'ineligible_non_contracted': { title: "Not Eligible for Traineeship Program", message: "This specific funded program is structured as a Traineeship, which requires you to be a contracted (full-time or part-time) employee in a dental assisting role. Based on your employment status, you are not eligible for this funding stream. Please contact us to discuss fee-paying options.", program: "No Enrolment", category: "Not Eligible" },
-            'outcome_path_1': { title: "Path 1: Fee-Free Traineeship (Cert IV)", message: "You are highly likely to be eligible for the <strong>Certificate IV in Dental Assisting Traineeship</strong>. As you have recently completed (or are about to complete) a Cert III, you can access a fee-free traineeship for your elevation training.", program: "Certificate IV in Dental Assisting (Traineeship)", category: "Fee-free traineeship" },
-            'outcome_path_2': { title: "Path 2: Fee-Free Traineeship (Cert III)", message: "You are highly likely to be eligible for the <strong>Certificate III in Dental Assisting Traineeship</strong>. Your employer can access a full NSW Smart & Skilled subsidy for your structured, on-the-job training as a new staff member.", program: "Certificate III in Dental Assisting (Traineeship)", category: "Fee-free traineeship" },
-            'outcome_path_3': { title: "Path 3: Cert IV with Co-payment Funding", message: "You are eligible for the <strong>Certificate IV in Dental Assisting</strong> qualification. Because your Cert III completion falls outside the recent traineeship window, limited Entitlement Full Qualification (EFQ) funding may be available to contribute to the practice's training costs, resulting in a co-payment for the student or employer.", program: "Certificate IV in Dental Assisting (EFQ Pool)", category: "State-based co-payment" },
-            'outcome_funding_fully': { title: "Fully Funded / High Subsidy Eligibility", message: "Based on your employment and study history, you are highly likely to be eligible for a <strong>State-based fully funded</strong> or a significantly high subsidy for the Certificate III in Dental Assisting. You can proceed with enrolment as a student (non-trainee).", program: "Certificate III in Dental Assisting (Student)", category: "State-based fully funded" },
-            'outcome_funding_co': { title: "State Co-payment / Fee-Paying Eligibility", message: "Due to your prior completion of a government-funded VET qualification, you may fall into the <strong>State-based funded co-payment</strong> to help pay for your studies. If you are not eligible for any subsidy, you will need to pay the full fee. We will confirm the exact fee upon submission.", program: "Certificate III/IV in Dental Assisting (Student)", category: "State-based co-payment / Fee-paying student" },
-            'error_generic': { title: "Quiz Error", message: "An unexpected error occurred in the quiz flow. Please try restarting, or contact us for direct assistance.", program: "Error", category: "Error" }
         };
 
-        // --- Global Functions accessible by inline HTML ---
-        window.nextStep = nextStep;
-        window.enableButton = enableButton;
-        window.validateInputFields = validateInputFields; 
+        // --- Global Quiz State (Available in the main script block) ---
+        window.currentStepIndex = 0;
+        window.currentVisibleStep = 1;
+        window.answers = {};
+        window.quizHistory = []; // New array to store fetched results
+
+        // --- Firestore Utilities ---
+        const QUIZ_RESULTS_COLLECTION_NAME = 'dental_assisting_quiz_results';
+
+        /**
+         * Saves the final quiz result to Firestore.
+         * @param {object} result - The result object from getQuizResult.
+         * @param {object} finalAnswers - The complete answers object.
+         */
+        window.saveQuizResult = async function(result, finalAnswers) {
+            if (!window.db || !window.userId) {
+                console.error("Firestore not initialized or user ID missing.");
+                return;
+            }
+            
+            const statusMessage = document.getElementById('save-status-message');
+            statusMessage.classList.remove('hidden', 'text-green-500', 'text-red-500');
+            statusMessage.classList.add('text-yellow-600');
+            statusMessage.textContent = 'Saving result...';
+
+            const userPath = `/artifacts/${window.appId}/users/${window.userId}/${QUIZ_RESULTS_COLLECTION_NAME}`;
+
+            try {
+                // Prepare data for saving
+                const dataToSave = {
+                    timestamp: Timestamp.fromDate(new Date()), // Use Firestore Timestamp
+                    category: result.category,
+                    program: result.program,
+                    message: result.message,
+                    title: result.title,
+                    answers: finalAnswers,
+                };
+
+                // Add the document to the user's private collection
+                const docRef = await addDoc(collection(window.db, userPath), dataToSave);
+                
+                console.log("Document written with ID: ", docRef.id);
+                statusMessage.textContent = 'Result saved successfully!';
+                statusMessage.classList.remove('text-yellow-600');
+                statusMessage.classList.add('text-green-500');
+            } catch (e) {
+                console.error("Error adding document: ", e);
+                statusMessage.textContent = 'Error saving result.';
+                statusMessage.classList.remove('text-yellow-600');
+                statusMessage.classList.add('text-red-500');
+            }
+        }
         
+        /**
+         * Loads the user's past quiz history from Firestore.
+         */
+        window.loadQuizHistory = async function() {
+            if (!window.db || !window.userId) {
+                console.error("Firestore not initialized or user ID missing.");
+                return;
+            }
+
+            const userPath = `/artifacts/${window.appId}/users/${window.userId}/${QUIZ_RESULTS_COLLECTION_NAME}`;
+            
+            try {
+                // Fetch documents from the collection path
+                const querySnapshot = await getDocs(collection(window.db, userPath));
+                
+                window.quizHistory = [];
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    window.quizHistory.push({
+                        id: doc.id,
+                        ...data
+                    });
+                });
+
+                // Sort the history by timestamp descending (most recent first)
+                window.quizHistory.sort((a, b) => b.timestamp.toMillis() - a.timestamp.toMillis());
+                
+                window.renderHistory(); // Re-render to display loaded history
+            } catch (e) {
+                console.error("Error fetching quiz history: ", e);
+                document.getElementById('step-content').innerHTML = `
+                    <p class="text-center text-red-500">Failed to load history.</p>
+                    <p class="text-center text-sm text-gray-500">${e.message}</p>
+                `;
+            }
+        }
+        
+        /**
+         * Renders the history screen.
+         */
+        window.renderHistory = function() {
+            document.getElementById('next-button').classList.add('hidden');
+            document.getElementById('restart-button').classList.remove('hidden');
+            document.getElementById('history-button').textContent = 'Return to Quiz Start';
+            document.getElementById('history-button').onclick = window.startQuiz;
+
+            const contentDiv = document.getElementById('step-content');
+            
+            let historyHTML = `
+                <h2 class="text-2xl font-semibold text-gray-800 mb-4 text-center">My Quiz History</h2>
+            `;
+
+            if (window.quizHistory.length === 0) {
+                historyHTML += '<p class="text-center text-gray-500">No previous quiz results found. Complete a quiz to save your first result!</p>';
+            } else {
+                historyHTML += '<div class="space-y-4 max-h-[400px] overflow-y-auto pr-2">';
+                
+                window.quizHistory.forEach((result, index) => {
+                    // Format the timestamp
+                    const date = result.timestamp?.toDate ? result.timestamp.toDate() : new Date();
+                    const formattedDate = date.toLocaleDateString('en-US', {
+                        year: 'numeric', month: 'short', day: 'numeric',
+                        hour: '2-digit', minute: '2-digit'
+                    });
+
+                    historyHTML += `
+                        <div class="p-4 border border-gray-200 rounded-lg shadow-sm ${index === 0 ? 'bg-blue-50 border-blue-200' : 'bg-white'}">
+                            <div class="flex justify-between items-start mb-2">
+                                <span class="text-xs font-medium text-gray-500">${formattedDate}</span>
+                                ${index === 0 ? '<span class="text-xs font-bold text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">LATEST</span>' : ''}
+                            </div>
+                            <p class="text-md font-bold text-gray-900">${result.title}</p>
+                            <p class="text-sm text-blue-600 mt-1">${result.program}</p>
+                            <p class="text-sm text-gray-600">Category: ${result.category}</p>
+                            <p class="text-xs text-gray-500 mt-2 italic">${result.message.substring(0, 100)}...</p>
+                        </div>
+                    `;
+                });
+
+                historyHTML += '</div>';
+            }
+            
+            contentDiv.innerHTML = historyHTML;
+        }
+
+    </script>
+
+    <!-- Main Quiz Logic and UI Functions -->
+    <script>
+        // --- Step Definitions ---
+        const steps = [
+            { 
+                question: "1. Are you currently an Australian citizen or a permanent resident?", 
+                name: "residency",
+                options: [
+                    { label: "Yes, I am an Australian citizen/permanent resident.", value: "yes" },
+                    { label: "No, I am not.", value: "no" }
+                ],
+                type: "radio"
+            },
+            { 
+                question: "2. What is your current employment status?", 
+                name: "employment",
+                options: [
+                    { label: "Employed in a dental practice (Student Dentist/Dental Assistant).", value: "dental_employed" },
+                    { label: "Employed in a non-dental field.", value: "non_dental_employed" },
+                    { label: "Unemployed.", value: "unemployed" }
+                ],
+                type: "radio"
+            },
+            { 
+                question: "3. Have you completed Year 12 or equivalent education?", 
+                name: "education",
+                options: [
+                    { label: "Yes, I have completed Year 12 or higher.", value: "yes" },
+                    { label: "No, I have not completed Year 12.", value: "no" }
+                ],
+                type: "radio"
+            },
+            { 
+                question: "4. Do you hold any other Australian government-subsidised vocational qualifications (e.g., Certificate IV or higher)?", 
+                name: "qualification_held",
+                options: [
+                    { label: "Yes, I have a higher vocational qualification.", value: "yes" },
+                    { label: "No, or I am unsure.", value: "no" }
+                ],
+                type: "radio"
+            },
+            { 
+                question: "5. Please enter your email address to receive the results (Required):", 
+                name: "email",
+                type: "text",
+                placeholder: "e.g., john.doe@example.com",
+                validation: (value) => {
+                    if (!value) return "Email is required.";
+                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                    if (!emailRegex.test(value)) return "Please enter a valid email address.";
+                    return null; // Valid
+                }
+            }
+        ];
+
+        // --- Result Logic ---
+        const results = {
+            'eligible_dental_employed': { 
+                title: "Highly Likely Eligible for Subsidised Training", 
+                message: "Based on your current employment in a dental practice and meeting residency requirements, you are highly likely eligible for subsidised training. You must be employed as a Student Dentist/Dental Assistant.", 
+                program: "Certificate III/IV in Dental Assisting (Subsidised)", 
+                category: "Subsidised / Fee Exemption" 
+            },
+            'eligible_general': { 
+                title: "Potentially Eligible for Subsidised Training", 
+                message: "You meet the general residency requirements and education level, but your eligibility is contingent on meeting specific government funding criteria (e.g., not having a prior higher qualification). We will verify your exact eligibility.", 
+                program: "Certificate III/IV in Dental Assisting (Subsidised/Co-payment)", 
+                category: "Co-payment / Subsidised" 
+            },
+            'fee_paying_qualification': { 
+                title: "Likely Fee-Paying Student", 
+                message: "As you currently hold a higher vocational qualification, you may not be eligible for government funding and will need to pay the full fee. We will confirm the exact fee upon submission.", 
+                program: "Certificate III/IV in Dental Assisting (Student)", 
+                category: "State-based co-payment / Fee-paying student" 
+            },
+            'fee_paying_residency': { 
+                title: "Fee-Paying Student - Residency", 
+                message: "You do not meet the Australian residency requirements for subsidised training. You will be enrolled as a full fee-paying international or domestic student. We will confirm the exact fee upon submission.", 
+                program: "Certificate III/IV in Dental Assisting (Student)", 
+                category: "Fee-paying student" 
+            },
+            'error_generic': { 
+                title: "Quiz Error", 
+                message: "An unexpected error occurred in the quiz flow. Please try restarting, or contact us for direct assistance.", 
+                program: "Error", 
+                category: "Error" 
+            }
+        };
+
+        /**
+         * Calculates the final eligibility result based on user answers.
+         * @returns {object} The result object from the 'results' map.
+         */
+        function getQuizResult() {
+            // Priority 1: Residency failure (Fee-paying)
+            if (answers.residency === 'no') {
+                return results.fee_paying_residency;
+            }
+
+            // Priority 2: Currently employed in dental field (Highly Eligible)
+            if (answers.employment === 'dental_employed') {
+                return results.eligible_dental_employed;
+            }
+            
+            // Priority 3: Existing higher qualification (Likely Fee-Paying)
+            if (answers.qualification_held === 'yes') {
+                 // Note: Residency is 'yes' due to Priority 1 check
+                 return results.fee_paying_qualification;
+            }
+            
+            // Priority 4: General eligibility (All other 'yes' answers)
+            // This covers Australian residents, non-higher qualified, non-dental employed/unemployed.
+            if (answers.residency === 'yes' && answers.education === 'yes') {
+                return results.eligible_general;
+            }
+
+            // If we fall through, something unexpected happened or criteria wasn't met.
+            return results.error_generic;
+        }
+
+        /**
+         * Renders the current step's content.
+         * @param {number} index - The index of the step to render.
+         */
+        function renderStep(index) {
+            const step = steps[index];
+            const contentDiv = document.getElementById('step-content');
+            const progressBar = document.getElementById('progress-bar');
+            const stepCounter = document.getElementById('step-counter');
+            
+            // Set progress bar and counter
+            const progress = (index / (steps.length - 1)) * 100;
+            progressBar.style.width = `${progress}%`;
+            stepCounter.textContent = `Step ${currentVisibleStep} of ${steps.length}`;
+
+            let htmlContent = `
+                <div class="step-transition">
+                    <p class="text-xl font-semibold mb-4 text-gray-800">${step.question}</p>
+                    <form id="step-form">
+            `;
+
+            if (step.type === 'radio') {
+                step.options.forEach(option => {
+                    const isChecked = answers[step.name] === option.value;
+                    htmlContent += `
+                        <div class="mb-3">
+                            <label class="flex items-center p-3 bg-gray-100 rounded-lg cursor-pointer hover:bg-blue-100 transition duration-150">
+                                <input type="radio" name="${step.name}" value="${option.value}" 
+                                    class="h-4 w-4 text-blue-600 border-gray-300 focus:ring-blue-500" 
+                                    ${isChecked ? 'checked' : ''}
+                                    onchange="enableButton()">
+                                <span class="ml-3 text-gray-700 font-medium">${option.label}</span>
+                            </label>
+                        </div>
+                    `;
+                });
+            } else if (step.type === 'text') {
+                 // Pre-fill if answer exists
+                 const value = answers[step.name] || ''; 
+
+                 htmlContent += `
+                    <div class="mb-3">
+                        <input type="text" id="${step.name}" name="${step.name}" value="${value}"
+                            placeholder="${step.placeholder || ''}"
+                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150"
+                            onkeyup="validateInputFields()" onchange="validateInputFields()">
+                        <p id="${step.name}-warning" class="input-warning hidden"></p>
+                    </div>
+                 `;
+            }
+
+            htmlContent += `
+                    </form>
+                </div>
+            `;
+            
+            contentDiv.innerHTML = htmlContent;
+
+            // Immediately validate fields for text steps if they have content
+            if (step.type === 'text') {
+                validateInputFields();
+            } else {
+                // Ensure button is enabled if a radio answer is already selected
+                enableButton();
+            }
+            
+            // Restore History button if applicable
+            document.getElementById('history-button').classList.remove('hidden');
+        }
+
+        /**
+         * Validates input fields and enables the Next button.
+         */
+        window.validateInputFields = function() {
+            const step = steps[currentStepIndex];
+            let isValid = true;
+
+            if (step.type === 'radio') {
+                // Check if any radio button is selected
+                const form = document.getElementById('step-form');
+                const selected = form ? form.querySelector(`input[name="${step.name}"]:checked`) : null;
+                isValid = !!selected;
+            } else if (step.type === 'text') {
+                const input = document.getElementById(step.name);
+                const warning = document.getElementById(`${step.name}-warning`);
+                const validationError = step.validation ? step.validation(input.value) : null;
+                
+                if (validationError) {
+                    warning.textContent = validationError;
+                    warning.classList.remove('hidden');
+                    isValid = false;
+                } else {
+                    warning.classList.add('hidden');
+                    // Store valid answer temporarily to re-fill if going back
+                    answers[step.name] = input.value;
+                    isValid = true;
+                }
+            }
+
+            // Update button state
+            const nextButton = document.getElementById('next-button');
+            nextButton.disabled = !isValid;
+        }
+
+        // Alias for validateInputFields for radio buttons
+        window.enableButton = window.validateInputFields;
+
+
+        /**
+         * Progresses the quiz to the next step or shows results.
+         */
+        window.nextStep = function() {
+            const step = steps[currentStepIndex];
+            const nextButton = document.getElementById('next-button');
+
+            // 1. Collect answer for the current step
+            if (step.type === 'radio') {
+                const selected = document.querySelector(`input[name="${step.name}"]:checked`);
+                if (!selected) return; // Should not happen if button is enabled
+                answers[step.name] = selected.value;
+            } else if (step.type === 'text') {
+                const input = document.getElementById(step.name);
+                if (!input || step.validation(input.value)) return;
+                answers[step.name] = input.value;
+            }
+            
+            // 2. Advance step or finish
+            currentStepIndex++;
+            currentVisibleStep++;
+            nextButton.disabled = true; // Disable button for the next step immediately
+
+            if (currentStepIndex < steps.length) {
+                // Render the next step
+                renderStep(currentStepIndex);
+            } else {
+                // Quiz complete, show results
+                showResults();
+            }
+        }
+
+        /**
+         * Renders the final results screen.
+         */
+        function showResults() {
+            const result = getQuizResult();
+            const contentDiv = document.getElementById('step-content');
+            const nextButton = document.getElementById('next-button');
+            const restartButton = document.getElementById('restart-button');
+            const progressBar = document.getElementById('progress-bar');
+            const stepCounter = document.getElementById('step-counter');
+
+            // Final progress bar/counter display
+            progressBar.style.width = '100%';
+            stepCounter.textContent = `Completed!`;
+
+            // Hide Next, show Restart
+            nextButton.classList.add('hidden');
+            restartButton.classList.remove('hidden');
+            
+            // Update History button text
+            document.getElementById('history-button').textContent = 'View My Results History';
+            document.getElementById('history-button').onclick = window.loadQuizHistory;
+
+            // Render result content
+            contentDiv.innerHTML = `
+                <div class="text-center p-4">
+                    <svg class="w-12 h-12 text-blue-600 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                    </svg>
+                    <h2 class="text-2xl font-bold mb-3 text-blue-700">${result.title}</h2>
+                    <p class="text-gray-600 mb-4">${result.message}</p>
+                    
+                    <div class="text-left bg-gray-50 p-4 rounded-lg border border-gray-200">
+                        <p class="text-sm font-semibold text-gray-700">Program Enquired:</p>
+                        <p class="text-lg font-medium text-blue-600 mb-2">${result.program}</p>
+                        <p class="text-sm font-semibold text-gray-700">Eligibility Category:</p>
+                        <p class="text-base text-gray-800">${result.category}</p>
+                        <p class="text-xs text-gray-500 mt-2">A full enrolment application is required to confirm final eligibility.</p>
+                    </div>
+                </div>
+            `;
+            
+            // Save the result to Firestore
+            window.saveQuizResult(result, answers);
+        }
+
         // Expose startQuiz to window so it can be called by the restart button and the init
         window.startQuiz = function() {
             if (!isAuthReady) {
@@ -554,12 +592,21 @@
             answers = {};
             document.getElementById('next-button').classList.remove('hidden');
             document.getElementById('restart-button').classList.add('hidden');
-            document.getElementById('save-status-message').classList.add('hidden');
+            
+            // Reset and hide status message
+            const statusMessage = document.getElementById('save-status-message');
+            statusMessage.classList.add('hidden');
+            statusMessage.textContent = '';
+            
+            // Reset History button text and function
+            document.getElementById('history-button').textContent = 'View My Results History';
+            document.getElementById('history-button').onclick = window.loadQuizHistory;
+            
             renderStep(currentStepIndex);
         }
 
         // Initialize the quiz on load
-        window.onload = initializeFirebase;
+        // Note: initializeFirebase is called on window.onload, and startQuiz is called upon successful authentication.
 
     </script>
 
