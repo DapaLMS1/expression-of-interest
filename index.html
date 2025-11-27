@@ -204,7 +204,7 @@
             const firstName = (details.first_name || 'applicant').toLowerCase().replace(/[^a-z0-9]/g, '');
             const shortTimestamp = timestamp.toISOString().substring(0, 10).replace(/-/g, ''); // YYYYMMDD
             
-            // New, more memorable document ID format: LastName_FirstName_YYYYMMDD
+            // New, more memorable document ID format: LastName_FirstName_YYYYMMDD_Timestamp
             const docId = `${lastName}_${firstName}_${shortTimestamp}_${timestamp.getTime()}`.substring(0, 80); // Ensure docId is not excessively long
             
             // New, memorable collection name
