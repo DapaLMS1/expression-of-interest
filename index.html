@@ -209,9 +209,13 @@
             try {
                 // Correct Private data path: /artifacts/{appId}/users/{userId}/eligibility_submissions/{docId}
                 const collectionRef = collection(db, 'artifacts', appId, 'users', userId, 'eligibility_submissions');
+                const docId = timestamp.replace(/[:.]/g, '-');
+
+                // *** LOGGING THE EXACT PATH FOR DEBUGGING ***
+                console.log(`[Firestore DEBUG] Attempting to save to path: artifacts/${appId}/users/${userId}/eligibility_submissions/${docId}`);
                 
                 // Use the timestamp for a unique document ID
-                await setDoc(doc(collectionRef, timestamp.replace(/[:.]/g, '-')), submissionData);
+                await setDoc(doc(collectionRef, docId), submissionData);
 
                 saveStatusEl.classList.replace('text-gray-500', 'text-green-600');
                 saveStatusEl.innerHTML = `✅ Result saved successfully!`;
