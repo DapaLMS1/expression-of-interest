@@ -116,6 +116,15 @@
             try {
                 // *** ACTIVATING DEBUG LOGGING: Look for 'Permission denied' in the console! ***
                 setLogLevel('debug'); 
+                
+                // CRITICAL CHECK: If running outside the environment, firebaseConfig will be empty, 
+                // which causes the "projectId" error. We stop here and give a clear message.
+                if (Object.keys(firebaseConfig).length === 0) {
+                    const message = "Configuration Error: Firebase config is missing. This usually happens when the file is run directly in a browser (outside the Canvas environment) without a local configuration provided. If you intend to run this locally, you must replace `firebaseConfig`'s fallback `{}` with your actual configuration object.";
+                    console.error(message);
+                    document.getElementById('auth-status').textContent = `Initialization Error: ${message}`;
+                    return; // Stop initialization
+                }
 
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
