@@ -328,7 +328,26 @@
         }
 
         function renderOutcome(outcomeKey) {
+async function renderOutcome(outcomeKey) {
             const outcome = outcomes[outcomeKey];
+            
+            // --- DATA INTEGRATION START ---
+            // Tag the results with the specific outcome they achieved
+            answers.final_outcome = outcome.title;
+            answers.final_program = outcome.program;
+
+            // Send the data to your Google Cloud Bridge
+            fetch('https://ready-student-bridge-v3-205993130602.australia-southeast1.run.app/eoi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                mode: 'cors',
+                body: JSON.stringify(answers)
+            })
+            .then(response => response.json())
+            .then(data => console.log("Success! ReadyStudent ID created:", data.rs_id))
+            .catch(err => console.error("Bridge Error:", err));
+            // --- DATA INTEGRATION END ---
+
             const contentDiv = document.getElementById('step-content');
             document.getElementById('next-button').classList.add('hidden');
             document.getElementById('restart-button').classList.remove('hidden');
@@ -336,7 +355,6 @@
             // Update Progress Bar to 100%
             document.getElementById('progress-bar').style.width = `100%`;
             document.getElementById('current-step-display').textContent = MAX_STEPS;
-
 
             contentDiv.innerHTML = `
                 <div class="text-center py-6 bg-blue-100 rounded-xl mb-6">
